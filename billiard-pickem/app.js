@@ -7,19 +7,22 @@
 
   // ───────────── Константы раскладки ─────────────
 
+  const GF = 14;     // суперфинал
+  const RESET = 15;  // решающий матч, если суперфинал выиграл игрок нижней сетки
   const STAGES = {
-    1: 'Верхняя сетка · 1-й раунд', 2: 'Верхняя сетка · 1/4 финала', 3: 'Нижняя сетка · 1-й раунд',
-    4: 'Верхняя сетка · 1/2 финала', 5: 'Нижняя сетка · 2-й раунд', 6: 'Финал верхней сетки',
-    7: 'Нижняя сетка · 3-й раунд', 8: 'Нижняя сетка · 4-й раунд', 9: 'Финал нижней сетки', 10: 'Суперфинал'
+    1: 'Верхняя сетка · 1/4 финала', 2: 'Нижняя сетка · 1-й раунд', 3: 'Верхняя сетка · 1/2 финала',
+    4: 'Нижняя сетка · 2-й раунд', 5: 'Финал верхней сетки', 6: 'Нижняя сетка · 3-й раунд',
+    7: 'Финал нижней сетки', 8: 'Суперфинал'
   };
   // [колонка, строка] — карточка занимает 2 строки сетки
-  const UPPER_LAYOUT = { 1: [1, 1], 2: [1, 7], 3: [2, 1], 4: [2, 3], 5: [2, 5], 6: [2, 7], 7: [3, 2], 8: [3, 6], 9: [4, 4], 18: [5, 4], 19: [5, 1] };
-  const LOWER_LAYOUT = { 10: [1, 1], 11: [1, 3], 12: [2, 1], 13: [2, 3], 14: [3, 1], 15: [3, 3], 16: [4, 2], 17: [5, 2] };
-  const UPPER_EDGES = [[1, 3], [2, 6], [3, 7], [4, 7], [5, 8], [6, 8], [7, 9], [8, 9], [9, 18]];
-  const LOWER_EDGES = [[10, 12], [11, 13], [12, 14], [13, 15], [14, 16], [15, 16], [16, 17]];
-  const UPPER_COLS = ['1-й раунд', '1/4 финала', '1/2 финала', 'Финал верхней', 'Финал турнира'];
-  const LOWER_COLS = ['1-й раунд', '2-й раунд', '3-й раунд', '4-й раунд', 'Финал нижней'];
-  const ELIM_PLACE = { 10: '9–10 место', 11: '9–10 место', 12: '7–8 место', 13: '7–8 место', 14: '5–6 место', 15: '5–6 место', 16: '4 место', 17: '3 место' };
+  const UPPER_LAYOUT = { 1: [1, 1], 2: [1, 3], 3: [1, 5], 4: [1, 7], 7: [2, 2], 8: [2, 6], 11: [3, 4], 14: [4, 4], 15: [4, 1] };
+  const LOWER_LAYOUT = { 5: [1, 1], 6: [1, 3], 9: [2, 1], 10: [2, 3], 12: [3, 2], 13: [4, 2] };
+  const UPPER_EDGES = [[1, 7], [2, 7], [3, 8], [4, 8], [7, 11], [8, 11], [11, 14]];
+  const LOWER_EDGES = [[5, 9], [6, 10], [9, 12], [10, 12], [12, 13]];
+  const UPPER_COLS = ['1/4 финала', '1/2 финала', 'Финал верхней', 'Финал турнира'];
+  const LOWER_COLS = ['1-й раунд', '2-й раунд', '3-й раунд', 'Финал нижней'];
+  const ELIM_PLACE = { 5: '7–8 место', 6: '7–8 место', 9: '5–6 место', 10: '5–6 место', 12: '4 место', 13: '3 место' };
+  const TOP4_MATCHES = [11, 12];
 
   // ───────────── Состояние ─────────────
 
@@ -105,8 +108,8 @@
     return src[0] === 'S' ? `№${n}` : src[0] === 'W' ? `поб. М${n}` : `пр. М${n}`;
   }
   function matchTitle(m) {
-    if (m.id === 18) return 'Суперфинал · М18';
-    if (m.id === 19) return 'Матч 19 · если нужно';
+    if (m.id === GF) return `Суперфинал · М${GF}`;
+    if (m.id === RESET) return `Матч ${RESET} · если нужно`;
     return `Матч ${m.id}`;
   }
   function plural(n, one, few, many) {
@@ -133,7 +136,7 @@
   }
   function top4Set() {
     const s = new Set();
-    [9, 16].forEach(id => { const m = M(id); if (m.a) s.add(m.a); if (m.b) s.add(m.b); });
+    TOP4_MATCHES.forEach(id => { const m = M(id); if (m.a) s.add(m.a); if (m.b) s.add(m.b); });
     return s;
   }
   function pickResult(m, pid) {
@@ -141,8 +144,8 @@
     return pid === m.winner ? 'ok' : 'bad';
   }
   function visibleMatches() {
-    // М19 показываем, пока он может понадобиться
-    return S.matches.filter(m => m.active || !M(18).winner);
+    // Решающий матч показываем, пока он может понадобиться
+    return S.matches.filter(m => m.active || !M(GF).winner);
   }
 
   // ───────────── Рендер ─────────────
@@ -162,7 +165,7 @@
     const st = S.settings || {};
     document.getElementById('brandTitle').textContent = st.title || 'Турнир по бильярду';
     const sub = [st.date, st.place].filter(Boolean).join(' · ');
-    document.getElementById('brandSub').textContent = sub || 'Double elimination · 10 игроков · 18 партий (+1)';
+    document.getElementById('brandSub').textContent = sub || 'Double elimination · 8 игроков · 14 партий (+1)';
     document.title = `${st.title || 'Турнир по бильярду'} · Пикем`;
     document.getElementById('adminTab').hidden = !(me() && me().is_admin);
     const box = document.getElementById('userbox');
@@ -181,7 +184,7 @@
     const rec = playerRecords();
     const lb = S.leaderboard || [];
     const done = S.matches.filter(m => m.winner).length;
-    const total = M(18).winner && !M(19).active ? 18 : (M(19).active ? 19 : 18);
+    const total = M(RESET).active ? 15 : 14;
     const openCnt = S.matches.filter(m => m.open).length;
 
     app.innerHTML = `
@@ -199,12 +202,12 @@
 
       <div class="section">
         <div class="section-head"><h2>Верхняя сетка</h2><span class="muted">Проигравший переходит в нижнюю сетку — куда, указано в шапке матча</span></div>
-        <div class="bracket-wrap"><div class="bracket upper" id="bUpper">${bracketCols(UPPER_COLS)}${Object.entries(UPPER_LAYOUT).map(([id, pos]) => matchCard(M(+id), pos)).join('')}</div></div>
+        <div class="bracket-wrap"><div class="bracket upper" id="bUpper" style="grid-template-columns:repeat(${UPPER_COLS.length},minmax(200px,1fr))">${bracketCols(UPPER_COLS)}${Object.entries(UPPER_LAYOUT).map(([id, pos]) => matchCard(M(+id), pos)).join('')}</div></div>
       </div>
 
       <div class="section">
         <div class="section-head"><h2 style="color:var(--lower)">Нижняя сетка</h2><span class="muted">Второе поражение — выбывание. Оранжевым — игроки, пришедшие из верхней сетки</span></div>
-        <div class="bracket-wrap"><div class="bracket lower" id="bLower">${bracketCols(LOWER_COLS)}${Object.entries(LOWER_LAYOUT).map(([id, pos]) => matchCard(M(+id), pos)).join('')}</div></div>
+        <div class="bracket-wrap"><div class="bracket lower" id="bLower" style="grid-template-columns:repeat(${LOWER_COLS.length},minmax(200px,1fr))">${bracketCols(LOWER_COLS)}${Object.entries(LOWER_LAYOUT).map(([id, pos]) => matchCard(M(+id), pos)).join('')}</div></div>
         <div class="legend">
           ${me() && !me().is_admin ? '<span><i style="background:var(--gold)"></i>мой прогноз</span><span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span>' : ''}
           <span>% — доля участников пикема, выбравших игрока (видно после начала матча)</span>
@@ -230,7 +233,7 @@
             <div class="section-head"><h2>Итоги</h2></div>
             <div class="places">${[1, 2, 3, 4].map(n => {
               const pid = S.placements[String(n)];
-              const how = ['', 'поб. суперфинала', 'пр. суперфинала', 'пр. М17', 'пр. М16'][n];
+              const how = ['', 'поб. суперфинала', 'пр. суперфинала', 'пр. М13', 'пр. М12'][n];
               return `<div class="place"><span class="medal m${n}">${n}</span><span class="who ${pid ? '' : 'dim'}">${pid ? esc(P(pid)) : '—'}</span><span class="how">${how}</span></div>`;
             }).join('')}</div>
           </div>
@@ -266,11 +269,11 @@
       return `<div class="${cls}"><span class="seed">${pid ? '№' + pid : ''}</span><span class="pname ${pid ? '' : 'tbd'}">${pid ? esc(P(pid)) : srcLabel(src)}</span>${mine}${pct}</div>`;
     };
     let right = esc(m.loser_to || '');
-    if (m.id === 19) right = m.active ? 'играется' : (M(18).winner ? 'не нужен' : '');
+    if (m.id === RESET) right = m.active ? 'играется' : (M(GF).winner ? 'не нужен' : '');
     if (m.open && isPlayer() && !myPick(m.id)) right = '<span class="openflag">● сделать прогноз</span>';
     else if (m.locked && !m.winner) right = '<span class="openflag">идёт</span>';
     if (m.score) right = `<span class="score">${esc(m.score)}</span>`;
-        return `<div class="match ${m.bracket} ${m.active || !M(18).winner ? '' : 'inactive'}" data-match="${m.id}" style="grid-column:${col};grid-row:${row + 1} / span 2">
+        return `<div class="match ${m.bracket} ${m.active || !M(GF).winner ? '' : 'inactive'}" data-match="${m.id}" style="grid-column:${col};grid-row:${row + 1} / span 2">
       <div class="mh"><span>${matchTitle(m)}</span><span class="to">${right}</span></div>${row1('a')}${row1('b')}</div>`;
   }
 
@@ -295,7 +298,7 @@
     });
     let dashed = '';
     if (withFinal) {
-      const a = rect(18), b = rect(19);
+      const a = rect(GF), b = rect(RESET);
       if (a && b) {
         const x = a.left + a.width / 2 - g.left;
         dashed = `<path class="dashed" d="M${x},${a.top - g.top}V${b.bottom - g.top}"/>`;
@@ -321,7 +324,7 @@
       };
       const byPlayer = pid => picks.filter(p => p.player_id === pid).map(p => esc(p.account));
       let status;
-      if (!m.active) status = M(18).winner ? 'Матч не понадобился: суперфинал выиграл игрок верхней сетки.' : 'Играется, только если суперфинал (М18) выиграет игрок из нижней сетки.';
+      if (!m.active) status = M(GF).winner ? 'Матч не понадобился: суперфинал выиграл игрок верхней сетки.' : `Играется, только если суперфинал (М${GF}) выиграет игрок из нижней сетки.`;
       else if (m.winner) status = `Победитель: <b>${esc(P(m.winner))}</b>${m.score ? ` · счёт ${esc(m.score)}` : ''}`;
       else if (m.locked) status = 'Матч идёт — приём прогнозов закрыт.';
       else if (m.open) status = isPlayer() ? 'Приём прогнозов открыт — выберите победителя.' : (me() ? 'Приём прогнозов открыт.' : 'Приём прогнозов открыт. Войдите, чтобы сделать прогноз.');
@@ -439,7 +442,7 @@
       return `<div class="${cls}" ${m.open ? `data-pick="${pid}" data-match="${m.id}"` : ''}><small>№${pid}</small><b>${esc(P(pid))}</b>${crowd}</div>`;
     };
     let tag;
-    if (!m.active) tag = M(18).winner ? '<span class="tag">не понадобился</span>' : '<span class="tag" title="Играется, только если М18 выиграет игрок нижней сетки">если нужно</span>';
+    if (!m.active) tag = M(GF).winner ? '<span class="tag">не понадобился</span>' : `<span class="tag" title="Играется, только если М${GF} выиграет игрок нижней сетки">если нужно</span>`;
     else if (m.winner) {
       tag = !pick ? '<span class="tag">без прогноза</span>'
         : pick === m.winner ? `<span class="tag ok">+${m.points}</span>` : '<span class="tag bad">0</span>';
@@ -541,7 +544,7 @@
         <td class="num hide-sm">${x.picked}</td>
       </tr>`;
     }).join('');
-    const maxPts = S.matches.filter(m => m.active || !M(18).winner).reduce((a, m) => a + m.points, 0) + 11;
+    const maxPts = S.matches.filter(m => m.active || !M(GF).winner).reduce((a, m) => a + m.points, 0) + 11;
     app.innerHTML = `
       <div class="hero"><div><h1>Таблица пикема</h1><p>Обновляется автоматически после каждого результата. Нажмите на участника, чтобы увидеть его прогнозы.</p></div></div>
       <div class="panel section" style="padding:6px 8px">
@@ -598,11 +601,11 @@
           <h2>Турнир</h2>
           <ul>
             <li>Двойное выбывание: <b>два поражения — игрок выбывает</b>.</li>
-            <li>№1–6 начинают с 1/4 финала, №7–10 — с 1-го раунда.</li>
+            <li>Все 8 игроков начинают с 1/4 финала. Пары по силе: 1–8, 4–5, 2–7, 3–6.</li>
             <li>Проигравший в верхней сетке переходит в нижнюю — куда, указано в шапке матча.</li>
-            <li>В суперфинале (М18) играют победители верхней (М9) и нижней (М17) сеток.</li>
-            <li>Если М18 выигрывает игрок из нижней сетки, у обоих по одному поражению — играется <b>М19</b>.</li>
-            <li>1 место — победитель суперфинала, 2 — проигравший, 3 — проигравший М17, 4 — проигравший М16.</li>
+            <li>В суперфинале (М14) играют победители верхней (М11) и нижней (М13) сеток.</li>
+            <li>Если М14 выигрывает игрок из нижней сетки, у обоих по одному поражению — играется <b>М15</b>.</li>
+            <li>1 место — победитель суперфинала, 2 — проигравший, 3 — проигравший М13, 4 — проигравший М12, 5–6 — проигравшие М9/М10, 7–8 — проигравшие М5/М6.</li>
           </ul>
         </div>
         <div class="panel">

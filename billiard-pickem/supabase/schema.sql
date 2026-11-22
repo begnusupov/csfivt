@@ -1,4 +1,4 @@
--- Турнир по бильярду: сетка double elimination на 10 игроков + пикем.
+-- Турнир по бильярду: сетка double elimination на 8 игроков + пикем.
 -- Вся работа с данными идёт через SECURITY DEFINER функции (RPC).
 -- Таблицы закрыты RLS без политик: напрямую из браузера их не прочитать.
 
@@ -12,14 +12,17 @@ create table if not exists public.players (
 );
 
 create table if not exists public.match_defs (
-  id        int primary key check (id between 1 and 19),
+  id        int primary key check (id between 1 and 31),
   bracket   text not null check (bracket in ('upper', 'lower', 'final')),
   round     text not null,          -- подпись раунда
   a_src     text not null,          -- S8 = посев №8, W1 = победитель М1, L6 = проигравший М6
   b_src     text not null,
   loser_to  text,                   -- подпись «пр. → М10» / «4 место»
   points    int  not null,          -- очки пикема за угаданного победителя
-  play_order int not null           -- шаг из «Порядка игр»
+  play_order int not null,          -- шаг из «Порядка игр»
+  reset_of  int,                    -- решающий матч: играется, только если матч reset_of выиграл игрок нижней сетки
+  loser_place int,                  -- какое место занимает проигравший (3, 4, 5, 7)
+  top4      boolean not null default false  -- оба участника гарантированно в топ-4
 );
 
 create table if not exists public.matches (
@@ -82,34 +85,33 @@ revoke all on all sequences in schema public from anon, authenticated;
 -- ───────────── Данные турнира (из PDF) ─────────────
 
 insert into public.players (id, name) values
-  (1, 'Кутя'), (2, 'Шер'), (3, 'Иса'), (4, 'Ильяс'), (5, 'Керим'),
-  (6, 'Атай'), (7, 'Бека'), (8, 'Арлен'), (9, 'Бекжа'), (10, 'Улик')
+  (1, 'Кутя'), (2, 'Шер'), (3, 'Иса'), (4, 'Ильяс'),
+  (5, 'Керим'), (6, 'Алтай'), (7, 'Арлен'), (8, 'Бекжа')
 on conflict (id) do update set name = excluded.name;
 
-insert into public.match_defs (id, bracket, round, a_src, b_src, loser_to, points, play_order) values
-  ( 1, 'upper', '1-й раунд',          'S8',  'S9',  'пр. → М10',  1,  1),
-  ( 2, 'upper', '1-й раунд',          'S7',  'S10', 'пр. → М11',  1,  1),
-  ( 3, 'upper', '1/4 финала',         'S1',  'W1',  'пр. → М11',  1,  2),
-  ( 4, 'upper', '1/4 финала',         'S4',  'S5',  'пр. → М13',  1,  2),
-  ( 5, 'upper', '1/4 финала',         'S3',  'S6',  'пр. → М12',  1,  2),
-  ( 6, 'upper', '1/4 финала',         'S2',  'W2',  'пр. → М10',  1,  2),
-  ( 7, 'upper', '1/2 финала',         'W3',  'W4',  'пр. → М14',  2,  4),
-  ( 8, 'upper', '1/2 финала',         'W5',  'W6',  'пр. → М15',  2,  4),
-  ( 9, 'upper', 'Финал верхней',      'W7',  'W8',  'пр. → М17',  3,  6),
-  (10, 'lower', '1-й раунд',          'L1',  'L6',  'пр. выбывает', 1,  3),
-  (11, 'lower', '1-й раунд',          'L2',  'L3',  'пр. выбывает', 1,  3),
-  (12, 'lower', '2-й раунд',          'W10', 'L5',  'пр. выбывает', 1,  5),
-  (13, 'lower', '2-й раунд',          'W11', 'L4',  'пр. выбывает', 1,  5),
-  (14, 'lower', '3-й раунд',          'W12', 'L7',  'пр. выбывает', 2,  7),
-  (15, 'lower', '3-й раунд',          'W13', 'L8',  'пр. выбывает', 2,  7),
-  (16, 'lower', '4-й раунд',          'W14', 'W15', 'пр. — 4 место', 2,  8),
-  (17, 'lower', 'Финал нижней',       'W16', 'L9',  'пр. — 3 место', 3,  9),
-  (18, 'final', 'Суперфинал',         'W9',  'W17', null,         5, 10),
-  (19, 'final', 'Решающий матч', 'W9', 'W17', null,         5, 10)
+-- Сетка на 8 игроков: 1/4 финала по посеву 1–8, 4–5, 2–7, 3–6.
+-- В нижней сетке пары перекрёстные, чтобы не было повторных встреч.
+insert into public.match_defs (id, bracket, round, a_src, b_src, loser_to, points, play_order, reset_of, loser_place, top4) values
+  ( 1, 'upper', '1/4 финала',     'S1',  'S8',  'пр. → М5',      1, 1, null, null, false),
+  ( 2, 'upper', '1/4 финала',     'S4',  'S5',  'пр. → М5',      1, 1, null, null, false),
+  ( 3, 'upper', '1/4 финала',     'S2',  'S7',  'пр. → М6',      1, 1, null, null, false),
+  ( 4, 'upper', '1/4 финала',     'S3',  'S6',  'пр. → М6',      1, 1, null, null, false),
+  ( 5, 'lower', '1-й раунд',      'L1',  'L2',  'пр. выбывает',  1, 2, null, 7,    false),
+  ( 6, 'lower', '1-й раунд',      'L3',  'L4',  'пр. выбывает',  1, 2, null, 7,    false),
+  ( 7, 'upper', '1/2 финала',     'W1',  'W2',  'пр. → М10',     2, 3, null, null, false),
+  ( 8, 'upper', '1/2 финала',     'W3',  'W4',  'пр. → М9',      2, 3, null, null, false),
+  ( 9, 'lower', '2-й раунд',      'W5',  'L8',  'пр. выбывает',  2, 4, null, 5,    false),
+  (10, 'lower', '2-й раунд',      'W6',  'L7',  'пр. выбывает',  2, 4, null, 5,    false),
+  (11, 'upper', 'Финал верхней',  'W7',  'W8',  'пр. → М13',     3, 5, null, null, true),
+  (12, 'lower', '3-й раунд',      'W9',  'W10', 'пр. — 4 место', 2, 6, null, 4,    true),
+  (13, 'lower', 'Финал нижней',   'W12', 'L11', 'пр. — 3 место', 3, 7, null, 3,    false),
+  (14, 'final', 'Суперфинал',     'W11', 'W13', null,            5, 8, null, null, false),
+  (15, 'final', 'Решающий матч',  'W11', 'W13', null,            5, 8, 14,   null, false)
 on conflict (id) do update set
   bracket = excluded.bracket, round = excluded.round, a_src = excluded.a_src,
   b_src = excluded.b_src, loser_to = excluded.loser_to, points = excluded.points,
-  play_order = excluded.play_order;
+  play_order = excluded.play_order, reset_of = excluded.reset_of,
+  loser_place = excluded.loser_place, top4 = excluded.top4;
 
 insert into public.matches (id) select id from public.match_defs on conflict do nothing;
 
@@ -127,8 +129,8 @@ language plpgsql stable
 set search_path = public
 as $$
 declare
-  w   int[] := array_fill(null::int, array[19]);
-  l   int[] := array_fill(null::int, array[19]);
+  w   int[] := array_fill(null::int, array[31]);
+  l   int[] := array_fill(null::int, array[31]);
   d   record;
   pa  int;
   pb  int;
@@ -136,7 +138,7 @@ declare
   act boolean;
 begin
   for d in
-    select md.id, md.a_src, md.b_src, m.winner as stored
+    select md.id, md.a_src, md.b_src, md.reset_of, m.winner as stored
     from match_defs md join matches m on m.id = md.id
     order by md.id
   loop
@@ -149,8 +151,8 @@ begin
             when 'W' then w[substr(d.b_src, 2)::int]
             else          l[substr(d.b_src, 2)::int] end;
 
-    -- М19 играется, только если суперфинал выиграл игрок из нижней сетки.
-    act := d.id <> 19 or (w[18] is not null and w[18] = pb);
+    -- Решающий матч играется, только если суперфинал выиграл игрок из нижней сетки (сторона b).
+    act := d.reset_of is null or (w[d.reset_of] is not null and w[d.reset_of] = pb);
 
     if act and pa is not null and pb is not null and d.stored in (pa, pb) then
       win := d.stored;
@@ -208,6 +210,32 @@ set search_path = public
 as $$
   select coalesce((select value from settings where key = 'predictions_locked'), 'false') <> 'true'
      and not exists (select 1 from matches where locked or winner is not null);
+$$;
+
+-- Итоговые места: 1–2 по суперфиналу (и решающему матчу), 3–4 по проигравшим в нижней сетке.
+create or replace function public._placements()
+returns jsonb
+language plpgsql stable security definer
+set search_path = public
+as $$
+declare
+  gf record; rs record;
+  champ int; second int;
+begin
+  select c.* into gf from compute_bracket() c join match_defs md on md.id = c.match_id
+   where md.bracket = 'final' and md.reset_of is null;
+  select c.* into rs from compute_bracket() c join match_defs md on md.id = c.match_id
+   where md.reset_of is not null;
+  if gf.winner is not null then
+    if gf.winner = gf.a then champ := gf.a; second := gf.b;
+    elsif rs.winner is not null then champ := rs.winner; second := rs.loser;
+    end if;
+  end if;
+  return jsonb_build_object(
+    '1', champ, '2', second,
+    '3', (select c.loser from compute_bracket() c join match_defs md on md.id = c.match_id where md.loser_place = 3),
+    '4', (select c.loser from compute_bracket() c join match_defs md on md.id = c.match_id where md.loser_place = 4));
+end;
 $$;
 
 -- Матч скрывает чужие пики, пока открыт приём (нет результата и не закрыт организатором).
@@ -285,29 +313,16 @@ declare
   br       jsonb;
   res      jsonb;
   pred_open boolean := _predictions_open();
-  champ int; second int; third int; fourth int;
-  b18 record; b19 record;
 begin
   if p_token is not null then
     select a.* into acc from sessions s join accounts a on a.id = s.account_id
      where s.token = p_token and s.created_at > now() - interval '90 days';
   end if;
 
-  -- Итоговые места
-  select * into b18 from compute_bracket() where match_id = 18;
-  select * into b19 from compute_bracket() where match_id = 19;
-  if b18.winner is not null then
-    if b18.winner = b18.a then champ := b18.a; second := b18.b;
-    elsif b19.winner is not null then champ := b19.winner; second := b19.loser;
-    end if;
-  end if;
-  select loser into third  from compute_bracket() where match_id = 17;
-  select loser into fourth from compute_bracket() where match_id = 16;
-
   select jsonb_agg(jsonb_build_object(
            'id', md.id, 'bracket', md.bracket, 'round', md.round,
            'a_src', md.a_src, 'b_src', md.b_src, 'loser_to', md.loser_to,
-           'points', md.points, 'play_order', md.play_order,
+           'points', md.points, 'play_order', md.play_order, 'reset_of', md.reset_of,
            'a', br.a, 'b', br.b, 'winner', br.winner, 'loser', br.loser,
            'active', br.active, 'score', m.score, 'locked', m.locked,
            'open', br.active and br.a is not null and br.b is not null
@@ -331,7 +346,7 @@ begin
                                   order by is_admin, player_id) from accounts),
     'matches',  br,
     'predictions_open', pred_open,
-    'placements', jsonb_build_object('1', champ, '2', second, '3', third, '4', fourth),
+    'placements', _placements(),
     'leaderboard', (select coalesce(jsonb_agg(to_jsonb(lb) order by lb.total desc, lb.correct desc, lb.name), '[]'::jsonb)
                       from public._leaderboard() lb),
     'revealed_picks', (
@@ -364,21 +379,15 @@ language plpgsql stable security definer
 set search_path = public
 as $$
 declare
-  champ int;
-  b18 record; b19 record;
+  champ int := (_placements() ->> '1')::int;
 begin
-  select * into b18 from compute_bracket() where match_id = 18;
-  select * into b19 from compute_bracket() where match_id = 19;
-  if b18.winner is not null then
-    if b18.winner = b18.a then champ := b18.a;
-    elsif b19.winner is not null then champ := b19.winner;
-    end if;
-  end if;
-
   return query
   with
-  top4 as (  -- в топ-4 гарантированно все участники М9 и М16
-    select x as player_id from compute_bracket(), unnest(array[a, b]) x where match_id in (9, 16) and x is not null
+  top4 as (  -- в топ-4 гарантированно все участники финала верхней сетки и 3-го раунда нижней
+    select x as player_id
+    from compute_bracket() c join match_defs md on md.id = c.match_id and md.top4,
+         unnest(array[c.a, c.b]) x
+    where x is not null
   ),
   rec as (   -- победы/поражения игроков
     select pl.id as player_id,
@@ -516,7 +525,7 @@ begin
   select * into br from compute_bracket() where match_id = p_match;
   if br.match_id is null then raise exception 'Нет такого матча'; end if;
   if p_winner is not null then
-    if not br.active then raise exception 'Матч 19 не нужен: суперфинал выиграл игрок верхней сетки'; end if;
+    if not br.active then raise exception 'Решающий матч не нужен: суперфинал выиграл игрок верхней сетки'; end if;
     if br.a is null or br.b is null then raise exception 'Участники матча ещё не определены'; end if;
     if p_winner not in (br.a, br.b) then raise exception 'Этот игрок не играет в матче'; end if;
   end if;

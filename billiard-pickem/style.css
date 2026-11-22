@@ -145,8 +145,7 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
   scrollbar-color: var(--line2) transparent;
 }
 .bracket {
-  position: relative; display: grid; gap: 0 40px; min-width: 1120px;
-  grid-template-columns: repeat(5, minmax(190px, 1fr));
+  position: relative; display: grid; gap: 0 48px; min-width: 920px;
 }
 .bracket .col-title {
   font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
