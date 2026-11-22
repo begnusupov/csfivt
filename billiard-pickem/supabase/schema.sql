@@ -372,25 +372,34 @@ begin
 end;
 $$;
 
--- Таблица пикема (внутренняя, вызывается из get_state). Очки — только за угаданных победителей матчей.
+-- Таблица пикема (внутренняя, вызывается из get_state). Очки — за угаданных победителей матчей.
+-- Финал турнира (суперфинал + решающий матч) считается как один прогноз: прогноз на суперфинал
+-- сравнивается с чемпионом турнира, решающий матч отдельно не прогнозируется — максимум у всех одинаковый.
 -- Колонка pred_pts оставлена для совместимости и всегда равна 0.
 create or replace function public._leaderboard()
 returns table (name text, match_pts int, pred_pts int, total int, correct int, decided int, picked int)
 language plpgsql stable security definer
 set search_path = public
 as $$
+declare
+  champ int := (_placements() ->> '1')::int;
 begin
   return query
-  with mp as (
-    select p.account_id,
-           sum(case when p.player_id = br.winner then md.points else 0 end)::int as pts,
-           count(*) filter (where p.player_id = br.winner)::int as ok,
-           count(*) filter (where br.winner is not null)::int as dec,
-           count(*)::int as cnt
+  with sc as (
+    select p.account_id, p.player_id, md.points,
+           case when md.bracket = 'final' then champ else br.winner end as actual
     from picks p
-    join compute_bracket() br on br.match_id = p.match_id and br.active
-    join match_defs md on md.id = p.match_id
-    group by p.account_id
+    join match_defs md on md.id = p.match_id and md.reset_of is null
+    join compute_bracket() br on br.match_id = p.match_id
+  ),
+  mp as (
+    select account_id,
+           sum(case when player_id = actual then points else 0 end)::int as pts,
+           count(*) filter (where player_id = actual)::int as ok,
+           count(*) filter (where actual is not null)::int as dec,
+           count(*)::int as cnt
+    from sc
+    group by account_id
   )
   select ac.name,
          coalesce(mp.pts, 0), 0,
@@ -433,6 +442,10 @@ begin
     pb := case left(d.b_src, 1) when 'S' then substr(d.b_src, 2)::int
             when 'W' then w[substr(d.b_src, 2)::int] else l[substr(d.b_src, 2)::int] end;
     act := d.reset_of is null or (w[d.reset_of] is not null and w[d.reset_of] = pb);
+    -- решающий матч в пикеме не прогнозируется (финал считается по чемпиону)
+    if d.reset_of is not null then
+      continue;
+    end if;
     pk := nullif(p_picks ->> d.id::text, '')::int;
     if pk is not null then
       if not act or pa is null or pb is null or pk not in (pa, pb) then
