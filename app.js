@@ -420,7 +420,7 @@
             : 'Пикем закрыт. Зелёный — угадал победителя матча, красный — мимо.'}</p>
         </div>
         <div class="stats">
-          ${open ? `<div class="stat"><b>${filled}/${needed}</b><span>заполнено</span></div>` : `<div class="stat"><b>${row.total}</b><span>${plural(row.total, 'очко', 'очка', 'очков')}</span></div><div class="stat"><b>${rank}<span style="font-size:13px;color:var(--muted)">/${lb.length}</span></b><span>место</span></div>`}
+          ${open ? `<div class="stat"><b>${filled}/${needed}</b><span>заполнено</span></div>` : `<div class="stat"><b>${row.total}</b><span>угадано</span></div><div class="stat"><b>${rank}<span style="font-size:13px;color:var(--muted)">/${lb.length}</span></b><span>место</span></div>`}
           <div class="stat"><b style="font-size:16px">${champ ? esc(P(champ)) : '—'}</b><span>чемпион по пикему</span></div>
         </div>
       </div>
@@ -439,7 +439,7 @@
       <div class="section">
         <div class="section-head"><h2 style="color:var(--lower)">Нижняя сетка</h2></div>
         <div class="bracket-wrap"><div class="bracket lower pickmode" id="bLower" style="grid-template-columns:repeat(${LOWER_COLS.length},minmax(200px,1fr))">${bracketCols(LOWER_COLS)}${Object.entries(LOWER_LAYOUT).map(([id, pos]) => pickCard(M(+id), pos, pr, editable)).join('')}</div></div>
-        <div class="legend"><span>+N — очки за угаданного победителя матча</span>${open ? '' : '<span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span><span>«факт» — кто выиграл на самом деле</span>'}</div>
+        <div class="legend"><span>+1 за каждый угаданный матч</span>${open ? '' : '<span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span><span>«факт» — кто выиграл на самом деле</span>'}</div>
       </div>`;
 
     [...app.querySelectorAll('.bracket-wrap')].forEach((e, i) => { if (scrolls[i]) e.scrollLeft = scrolls[i]; });
@@ -516,6 +516,7 @@
 
   function viewLeaderboard() {
     const lb = S.leaderboard || [];
+    const decidedCnt = S.matches.filter(m => actualWinner(m)).length;
     let prev = null, rank = 0;
     const rows = lb.map((x, i) => {
       if (!prev || prev.total !== x.total || prev.correct !== x.correct) rank = i + 1;
@@ -524,8 +525,7 @@
       return `<tr class="clickable ${isMe ? 'me' : ''}" data-name="${esc(x.name)}">
         <td><span class="rank ${rank <= 3 && x.total > 0 ? 'r' + rank : ''}">${rank}</span></td>
         <td><span class="lb-name">${esc(x.name)}${isMe ? ' <span class="tag gold">вы</span>' : ''}</span></td>
-        <td class="num"><span class="total">${x.total}</span></td>
-        <td class="num"><b class="${x.correct ? 'okc' : 'dim'}">${x.correct}</b></td>
+        <td class="num"><span class="total ${x.total ? 'okc' : ''}">${x.total}</span><span class="dim">/${decidedCnt}</span></td>
         <td class="num hide-sm">${x.picked}</td>
       </tr>`;
     }).join('');
@@ -534,11 +534,11 @@
       <div class="hero"><div><h1>Таблица пикема</h1><p>Обновляется автоматически после каждого результата. После начала турнира нажмите на участника, чтобы увидеть его сетку.</p></div></div>
       <div class="panel section" style="padding:6px 8px">
         <table class="tbl">
-          <thead><tr><th>#</th><th>Участник</th><th class="num">Очки</th><th class="num">Угадано</th><th class="num hide-sm">Прогнозов</th></tr></thead>
+          <thead><tr><th>#</th><th>Участник</th><th class="num">Угадано</th><th class="num hide-sm">Прогнозов</th></tr></thead>
           <tbody>${rows || '<tr><td colspan="7" class="muted">Пока пусто</td></tr>'}</tbody>
         </table>
       </div>
-      <p class="dim" style="font-size:13px">Максимум возможных очков: ${maxPts}. При равенстве очков выше тот, у кого больше угаданных прогнозов. Сетки участников видны после начала турнира.</p>
+      <p class="dim" style="font-size:13px">Угадано из сыгранных матчей. Максимум за турнир — ${maxPts}. Одинаковое число угаданных — одно место. Сетки участников видны после начала турнира.</p>
       <div class="section">
         <div class="section-head"><h2>Кто что угадал</h2><span class="muted">Сетки участников по матчам — открываются, когда начался турнир</span></div>
         <div class="panel" style="padding:10px">${picksGridHtml()}</div>
@@ -575,7 +575,7 @@
     }).sort((a, b) => b.ok - a.ok);
     const head = ms.map(m => m.id === GF
       ? `<th>Чемпион<small>${actualWinner(m) ? esc(P(actualWinner(m))) : '—'}</small></th>`
-      : `<th>М${m.id}<small>${m.winner ? esc(P(m.winner)) : 'идёт'}</small></th>`).join('');
+      : `<th>М${m.id}<small>${m.winner ? esc(P(m.winner)) : m.locked ? 'идёт' : '—'}</small></th>`).join('');
     return `<div class="gridwrap"><table class="pgrid"><thead><tr><th class="gname">Участник</th>${head}<th>Угадано</th></tr></thead><tbody>${rows.map(r => r.html).join('')}</tbody></table></div>`;
   }
 
@@ -604,18 +604,18 @@
             <li>Войдите под своим именем и паролем от организатора. Пароль можно сменить в профиле.</li>
             <li>Как на мейджоре: <b>до начала турнира заполните всю сетку</b> — в каждом матче выберите победителя. Он проходит дальше, проигравший уходит в нижнюю сетку.</li>
             <li>Сетку можно менять сколько угодно, пока не начат первый матч. Потом она закрывается для всех.</li>
-            <li>Очки дают за каждый матч, где угадан победитель — даже если по вашей сетке в этом матче играл кто-то другой, важно, кого вы поставили победителем.</li>
-            <li><b>Финал турнира</b> (М14 и, если понадобится, М15) считается как одно: победитель М14 в вашей сетке — ваш чемпион, +5 очков, если он выиграет турнир. М15 отдельно не прогнозируется, поэтому максимум очков у всех одинаковый.</li>
+            <li>Как в CS: <b>+1 за каждый угаданный матч</b>, все матчи весят одинаково. Важно, кого вы поставили победителем, — даже если по вашей сетке в этом матче играл кто-то другой.</li>
+            <li><b>Финал турнира</b> (М14 и, если понадобится, М15) считается как один прогноз: победитель М14 в вашей сетке — ваш чемпион, +1, если он выиграет турнир. М15 отдельно не прогнозируется, поэтому максимум у всех одинаковый.</li>
             <li>Чужие сетки и проценты «кто за кого» открываются, когда начинается турнир.</li>
             <li>Можно ставить и на себя, и против себя.</li>
           </ol>
         </div>
         <div class="panel">
-          <h2>Очки за матчи</h2>
+          <h2>Очки</h2>
           <table class="tbl"><tbody>
             ${Object.keys(byPts).sort((a, b) => a - b).map(p => `<tr><td><b>+${pts(+p)}</b></td><td class="muted">${byPts[p].join(', ')}</td></tr>`).join('')}
           </tbody></table>
-          <p class="dim" style="font-size:13px;margin-bottom:0">Максимум — ${S.matches.filter(m => !m.reset_of).reduce((a, m) => a + m.points, 0)} очков у всех, сыграют М15 или нет. При равенстве очков выше тот, у кого больше угаданных матчей.</p>
+          <p class="dim" style="font-size:13px;margin-bottom:0">Максимум — ${S.matches.filter(m => !m.reset_of).reduce((a, m) => a + m.points, 0)} у всех, сыграют М15 или нет. Одинаковое число угаданных — одно место.</p>
         </div>
       </div>`;
   }
