@@ -372,30 +372,16 @@ begin
 end;
 $$;
 
--- Таблица пикема (внутренняя, вызывается из get_state).
+-- Таблица пикема (внутренняя, вызывается из get_state). Очки — только за угаданных победителей матчей.
+-- Колонка pred_pts оставлена для совместимости и всегда равна 0.
 create or replace function public._leaderboard()
 returns table (name text, match_pts int, pred_pts int, total int, correct int, decided int, picked int)
 language plpgsql stable security definer
 set search_path = public
 as $$
-declare
-  champ int := (_placements() ->> '1')::int;
 begin
   return query
-  with
-  top4 as (  -- в топ-4 гарантированно все участники финала верхней сетки и 3-го раунда нижней
-    select x as player_id
-    from compute_bracket() c join match_defs md on md.id = c.match_id and md.top4,
-         unnest(array[c.a, c.b]) x
-    where x is not null
-  ),
-  rec as (   -- победы/поражения игроков
-    select pl.id as player_id,
-           (select count(*) from compute_bracket() where winner = pl.id) as wins,
-           (select count(*) from compute_bracket() where loser  = pl.id) as losses
-    from players pl
-  ),
-  mp as (
+  with mp as (
     select p.account_id,
            sum(case when p.player_id = br.winner then md.points else 0 end)::int as pts,
            count(*) filter (where p.player_id = br.winner)::int as ok,
@@ -405,30 +391,14 @@ begin
     join compute_bracket() br on br.match_id = p.match_id and br.active
     join match_defs md on md.id = p.match_id
     group by p.account_id
-  ),
-  pp as (
-    select pr.account_id,
-           sum(case
-                 when pr.kind = 'champion' and pr.player_id = champ then 5
-                 when pr.kind = 'top4' and pr.player_id in (select player_id from top4) then 1
-                 when pr.kind = 'zero' and exists (select 1 from rec r where r.player_id = pr.player_id and r.losses >= 2 and r.wins = 0) then 1
-                 else 0 end)::int as pts,
-           count(*) filter (where
-                 (pr.kind = 'champion' and pr.player_id = champ)
-              or (pr.kind = 'top4' and pr.player_id in (select player_id from top4))
-              or (pr.kind = 'zero' and exists (select 1 from rec r where r.player_id = pr.player_id and r.losses >= 2 and r.wins = 0))
-           )::int as ok
-    from predictions pr
-    group by pr.account_id
   )
   select ac.name,
-         coalesce(mp.pts, 0), coalesce(pp.pts, 0),
-         coalesce(mp.pts, 0) + coalesce(pp.pts, 0),
-         coalesce(mp.ok, 0) + coalesce(pp.ok, 0),
+         coalesce(mp.pts, 0), 0,
+         coalesce(mp.pts, 0),
+         coalesce(mp.ok, 0),
          coalesce(mp.dec, 0), coalesce(mp.cnt, 0)
   from accounts ac
   left join mp on mp.account_id = ac.id
-  left join pp on pp.account_id = ac.id
   where not ac.is_admin;
 end;
 $$;
@@ -472,50 +442,6 @@ begin
     end if;
     w[d.id] := pk;
     l[d.id] := case when pk is null then null when pk = pa then pb else pa end;
-  end loop;
-  return get_state(p_token);
-end;
-$$;
-
-create or replace function public.save_predictions(p_token uuid, p_champion int, p_top4 int[], p_zero int[])
-returns jsonb
-language plpgsql volatile security definer
-set search_path = public
-as $$
-declare
-  acc accounts;
-  i   int;
-begin
-  acc := _session_account(p_token);
-  if acc.is_admin then raise exception 'Организатор не участвует в пикеме'; end if;
-  if not _predictions_open() then raise exception 'Прогнозы на турнир уже закрыты'; end if;
-
-  p_top4 := coalesce(p_top4, '{}');
-  p_zero := coalesce(p_zero, '{}');
-  if cardinality(p_top4) > 4 then raise exception 'В топ-4 можно выбрать не больше 4 игроков'; end if;
-  if cardinality(p_zero) > 2 then raise exception 'В «0–2» можно выбрать не больше 2 игроков'; end if;
-  if (select count(distinct x) from unnest(p_top4) x) <> cardinality(p_top4)
-     or (select count(distinct x) from unnest(p_zero) x) <> cardinality(p_zero) then
-    raise exception 'Игрок выбран дважды';
-  end if;
-  if exists (select 1 from unnest(p_top4) x where x = any(p_zero))
-     or p_champion = any(p_zero) then
-    raise exception 'Один игрок не может быть и в топе, и в «0–2»';
-  end if;
-  if exists (select 1 from unnest(p_top4 || p_zero || array[p_champion]) x
-              where x is not null and x not in (select id from players)) then
-    raise exception 'Неизвестный игрок';
-  end if;
-
-  delete from predictions where account_id = acc.id;
-  if p_champion is not null then
-    insert into predictions values (acc.id, 'champion', 1, p_champion);
-  end if;
-  for i in 1 .. cardinality(p_top4) loop
-    insert into predictions values (acc.id, 'top4', i, p_top4[i]);
-  end loop;
-  for i in 1 .. cardinality(p_zero) loop
-    insert into predictions values (acc.id, 'zero', i, p_zero[i]);
   end loop;
   return get_state(p_token);
 end;
@@ -615,7 +541,6 @@ grant execute on function
   public.change_password(uuid, text, text),
   public.get_state(uuid),
   public.save_bracket(uuid, jsonb),
-  public.save_predictions(uuid, int, int[], int[]),
   public.admin_set_result(uuid, int, int, text),
   public.admin_set_lock(uuid, int, boolean),
   public.admin_set_setting(uuid, text, text),
