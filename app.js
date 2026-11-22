@@ -134,9 +134,17 @@
     if (pl['1']) { rec[pl['1']].out = '1 место'; rec[pl['2']].out = '2 место'; }
     return rec;
   }
+  // С чем сравнивается прогноз: в финале турнира — с чемпионом (М14 и М15 считаются вместе),
+  // решающий М15 отдельно не прогнозируется, в остальных матчах — с победителем матча.
+  function actualWinner(m) {
+    if (m.reset_of) return null;
+    if (m.id === GF) return (S.placements || {})['1'] || null;
+    return m.winner || null;
+  }
   function pickResult(m, pid) {
-    if (!pid || !m.winner) return '';
-    return pid === m.winner ? 'ok' : 'bad';
+    const aw = actualWinner(m);
+    if (!pid || !aw) return '';
+    return pid === aw ? 'ok' : 'bad';
   }
   function visibleMatches() {
     // Решающий матч показываем, пока он может понадобиться
@@ -259,7 +267,7 @@
       const src = m[side + '_src'];
       const fromUpper = m.bracket === 'lower' && src[0] === 'L';
       const cls = ['prow', fromUpper ? 'from-upper' : '', m.winner && pid === m.winner ? 'win' : '', m.winner && pid === m.loser ? 'lose' : ''].join(' ');
-      const mine = isPlayer() && pid && myPick(m.id) === pid ? `<span class="mypick ${pickResult(m, pid)}" title="мой прогноз"></span>` : '';
+      const mine = isPlayer() && pid && !m.reset_of && myPick(m.id) === pid ? `<span class="mypick ${pickResult(m, pid)}" title="мой прогноз"></span>` : '';
       const pct = m.votes && pid && totalVotes ? `<span class="pct">${Math.round(100 * (m.votes[pid] || 0) / totalVotes)}%</span>` : '';
       return `<div class="${cls}"><span class="seed">${pid ? '№' + pid : ''}</span><span class="pname ${pid ? '' : 'tbd'}">${pid ? esc(P(pid)) : srcLabel(src)}</span>${mine}${pct}</div>`;
     };
@@ -331,7 +339,7 @@
         <h2>${matchTitle(m)} <span class="muted" style="font-size:13px;font-family:Inter">· ${esc(m.round)}</span></h2>
         <div class="vs-body">${sideBtn('a')}<div class="vs-x">VS</div>${sideBtn('b')}</div>
         <p class="muted" style="margin:14px 0 6px">${status}</p>
-        <p class="dim" style="margin:0 0 12px;font-size:13px">За угаданного победителя: +${pts(m.points)}${m.loser_to ? ` · ${esc(m.loser_to)}` : ''}</p>
+        <p class="dim" style="margin:0 0 12px;font-size:13px">${m.reset_of ? 'В пикеме не прогнозируется: очки за финал дают за угаданного чемпиона' : m.id === GF ? `Пикем: +${pts(m.points)} за угаданного чемпиона турнира` : `За угаданного победителя: +${pts(m.points)}`}${m.loser_to ? ` · ${esc(m.loser_to)}` : ''}</p>
         ${m.revealed ? `
           <h3 style="margin:14px 0 8px">Кто на кого поставил</h3>
           ${m.a && m.b ? `<div class="picklist">
@@ -352,7 +360,7 @@
     const res = src => src[0] === 'S' ? +src.slice(1) : src[0] === 'W' ? (w[+src.slice(1)] || null) : (l[+src.slice(1)] || null);
     S.matches.slice().sort((a, b) => a.id - b.id).forEach(m => {
       const a = res(m.a_src), b = res(m.b_src);
-      const active = !m.reset_of || (w[m.reset_of] != null && w[m.reset_of] === b);
+      const active = !m.reset_of;   // решающий матч в пикеме не прогнозируется
       const p = picks[m.id];
       const win = active && a && b && (p === a || p === b) ? p : null;
       w[m.id] = win;
@@ -367,10 +375,7 @@
     return c;
   }
   function predictedChampion(pr) {
-    const gf = pr[GF], rs = pr[RESET];
-    if (!gf || !gf.winner) return null;
-    if (gf.winner === gf.a) return gf.a;
-    return rs && rs.winner ? rs.winner : null;
+    return pr[GF] ? pr[GF].winner : null;
   }
 
   function viewPickem() {
@@ -471,8 +476,15 @@
   }
 
   function pickCard(m, [col, row], pr, editable) {
+    if (m.reset_of) {
+      const row1 = side => `<div class="prow"><span class="seed">${m[side] ? '№' + m[side] : ''}</span><span class="pname ${m[side] ? '' : 'tbd'}">${m[side] ? esc(P(m[side])) : srcLabel(m[side + '_src'])}</span></div>`;
+      return `<div class="match pick ${m.bracket} ${m.active ? '' : 'inactive'}" data-match="${m.id}" style="grid-column:${col};grid-row:${row + 1} / span 2">
+        <div class="mh"><span>${matchTitle(m)}</span><span class="to">не в пикеме</span></div>${row1('a')}${row1('b')}
+        <div class="fact">${m.winner ? `факт: <b>${esc(P(m.winner))}</b>` : 'входит в «финал турнира» — очки за чемпиона'}</div></div>`;
+    }
     const p = pr[m.id];
-    const decided = !!m.winner;
+    const aw = actualWinner(m);
+    const decided = !!aw;
     const rowHtml = side => {
       const pid = p[side];
       const src = m[side + '_src'];
@@ -481,19 +493,21 @@
       if (m.bracket === 'lower' && src[0] === 'L') cls += ' from-upper';
       // прогноз «сгорел»: реальные участники матча известны, и выбранного игрока среди них нет
       const dead = picked && !decided && m.a && m.b && pid !== m.a && pid !== m.b;
-      if (picked) cls += decided ? (pid === m.winner ? ' pk-ok' : ' pk-bad') : dead ? ' pk-bad' : ' picked';
+      if (picked) cls += decided ? (pid === aw ? ' pk-ok' : ' pk-bad') : dead ? ' pk-bad' : ' picked';
       else if (p.winner) cls += ' pk-other';
       const can = editable && pid && p.active && p.a && p.b;
       return `<div class="${cls}${can ? ' pickable' : ''}" ${can ? `data-pm="${m.id}" data-pp="${pid}"` : ''}>
         <span class="seed">${pid ? '№' + pid : ''}</span>
         <span class="pname ${pid ? '' : 'tbd'}">${pid ? esc(P(pid)) : srcLabel(src)}</span>
-        ${picked ? `<span class="pkmark">${decided ? (pid === m.winner ? '✓' : '✗') : dead ? '✗' : '●'}</span>` : ''}
+        ${picked ? `<span class="pkmark">${decided ? (pid === aw ? '✓' : '✗') : dead ? '✗' : '●'}</span>` : ''}
       </div>`;
     };
-    let right = `+${m.points}`;
-    if (m.id === RESET && !p.active) right = 'если нужно';
-    const fact = decided ? `<div class="fact">факт: <b>${esc(P(m.winner))}</b>${m.score ? ' · ' + esc(m.score) : ''}</div>`
-      : (!m.active && M(GF).winner ? '<div class="fact">не понадобился</div>' : '');
+    const right = m.id === GF ? `+${m.points} · чемпион` : `+${m.points}`;
+    let fact = '';
+    if (m.id === GF) {
+      if (aw) fact = `<div class="fact">чемпион: <b>${esc(P(aw))}</b></div>`;
+      else if (m.winner) fact = `<div class="fact">М14: <b>${esc(P(m.winner))}</b> · чемпиона решит М15</div>`;
+    } else if (decided) fact = `<div class="fact">факт: <b>${esc(P(m.winner))}</b>${m.score ? ' · ' + esc(m.score) : ''}</div>`;
     return `<div class="match pick ${m.bracket} ${p.active ? '' : 'inactive'}" data-match="${m.id}" style="grid-column:${col};grid-row:${row + 1} / span 2">
       <div class="mh"><span>${matchTitle(m)}</span><span class="to">${right}</span></div>${rowHtml('a')}${rowHtml('b')}${fact}</div>`;
   }
@@ -515,7 +529,7 @@
         <td class="num hide-sm">${x.picked}</td>
       </tr>`;
     }).join('');
-    const maxPts = S.matches.filter(m => m.active || !M(GF).winner).reduce((a, m) => a + m.points, 0);
+    const maxPts = S.matches.filter(m => !m.reset_of).reduce((a, m) => a + m.points, 0);
     app.innerHTML = `
       <div class="hero"><div><h1>Таблица пикема</h1><p>Обновляется автоматически после каждого результата. После начала турнира нажмите на участника, чтобы увидеть его сетку.</p></div></div>
       <div class="panel section" style="padding:6px 8px">
@@ -542,23 +556,26 @@
 
   function picksGridHtml() {
     if (S.predictions_open) return '<div class="dim" style="padding:14px;text-align:center">Сводка появится, когда начнётся турнир — до этого сетки участников скрыты.</div>';
-    const ms = visibleMatches().sort((a, b) => a.play_order - b.play_order || a.id - b.id);
+    const ms = S.matches.filter(m => !m.reset_of).sort((a, b) => a.play_order - b.play_order || a.id - b.id);
     const pickOf = {};
     (S.revealed_picks || []).forEach(p => { pickOf[`${p.account}|${p.match_id}`] = p.player_id; });
-    const decided = ms.filter(m => m.winner).length;
+    const decided = ms.filter(m => actualWinner(m)).length;
     const rows = (S.leaderboard || []).map(x => {
       let ok = 0;
       const cells = ms.map(m => {
         const pid = pickOf[`${x.name}|${m.id}`];
         if (!pid) return '<td class="gc none">—</td>';
         let cls = 'pend';
-        if (m.winner) { if (pid === m.winner) { ok++; cls = 'ok'; } else cls = 'bad'; }
+        const aw = actualWinner(m);
+        if (aw) { if (pid === aw) { ok++; cls = 'ok'; } else cls = 'bad'; }
         return `<td class="gc ${cls}">${esc(P(pid))}</td>`;
       }).join('');
       const isMe = me() && me().name === x.name;
       return { ok, html: `<tr${isMe ? ' class="me"' : ''}><td class="gname">${esc(x.name)}</td>${cells}<td class="gc total"><b class="${ok ? 'okc' : 'dim'}">${ok}</b><span class="dim">/${decided}</span></td></tr>` };
     }).sort((a, b) => b.ok - a.ok);
-    const head = ms.map(m => `<th>М${m.id}<small>${m.winner ? esc(P(m.winner)) : 'идёт'}</small></th>`).join('');
+    const head = ms.map(m => m.id === GF
+      ? `<th>Чемпион<small>${actualWinner(m) ? esc(P(actualWinner(m))) : '—'}</small></th>`
+      : `<th>М${m.id}<small>${m.winner ? esc(P(m.winner)) : 'идёт'}</small></th>`).join('');
     return `<div class="gridwrap"><table class="pgrid"><thead><tr><th class="gname">Участник</th>${head}<th>Угадано</th></tr></thead><tbody>${rows.map(r => r.html).join('')}</tbody></table></div>`;
   }
 
@@ -566,7 +583,7 @@
 
   function viewRules() {
     const byPts = {};
-    S.matches.forEach(m => { (byPts[m.points] = byPts[m.points] || []).push('М' + m.id); });
+    S.matches.filter(m => !m.reset_of).forEach(m => { (byPts[m.points] = byPts[m.points] || []).push(m.id === GF ? 'финал турнира (чемпион)' : 'М' + m.id); });
     app.innerHTML = `
       <div class="hero"><div><h1>Правила</h1><p>Турнир и пикем — коротко и по делу.</p></div></div>
       <div class="rules section">
@@ -588,6 +605,7 @@
             <li>Как на мейджоре: <b>до начала турнира заполните всю сетку</b> — в каждом матче выберите победителя. Он проходит дальше, проигравший уходит в нижнюю сетку.</li>
             <li>Сетку можно менять сколько угодно, пока не начат первый матч. Потом она закрывается для всех.</li>
             <li>Очки дают за каждый матч, где угадан победитель — даже если по вашей сетке в этом матче играл кто-то другой, важно, кого вы поставили победителем.</li>
+            <li><b>Финал турнира</b> (М14 и, если понадобится, М15) считается как одно: победитель М14 в вашей сетке — ваш чемпион, +5 очков, если он выиграет турнир. М15 отдельно не прогнозируется, поэтому максимум очков у всех одинаковый.</li>
             <li>Чужие сетки и проценты «кто за кого» открываются, когда начинается турнир.</li>
             <li>Можно ставить и на себя, и против себя.</li>
           </ol>
@@ -597,7 +615,7 @@
           <table class="tbl"><tbody>
             ${Object.keys(byPts).sort((a, b) => a - b).map(p => `<tr><td><b>+${pts(+p)}</b></td><td class="muted">${byPts[p].join(', ')}</td></tr>`).join('')}
           </tbody></table>
-          <p class="dim" style="font-size:13px;margin-bottom:0">Максимум — ${S.matches.filter(m => !m.reset_of).reduce((a, m) => a + m.points, 0)} очков (+5, если понадобится М15). При равенстве очков выше тот, у кого больше угаданных матчей.</p>
+          <p class="dim" style="font-size:13px;margin-bottom:0">Максимум — ${S.matches.filter(m => !m.reset_of).reduce((a, m) => a + m.points, 0)} очков у всех, сыграют М15 или нет. При равенстве очков выше тот, у кого больше угаданных матчей.</p>
         </div>
       </div>`;
   }
