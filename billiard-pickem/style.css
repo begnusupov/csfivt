@@ -374,3 +374,29 @@ table.pgrid { border-collapse: separate; border-spacing: 3px; font-size: 13px; }
 .gc.pend { background: var(--panel2); border: 1px solid var(--line2); }
 .gc.none { color: var(--dim); }
 .gc.total { font-size: 15px; font-family: Unbounded, sans-serif; }
+
+/* ── Редактор сетки пикема ── */
+.pk-save {
+  position: sticky; bottom: 12px; z-index: 15; margin-top: 14px; padding: 10px 12px;
+  background: rgba(20, 26, 35, .94); backdrop-filter: blur(8px);
+  border: 1px solid var(--line2); border-radius: 12px; box-shadow: var(--shadow);
+}
+.match.pick { cursor: default; }
+.match.pick:hover { transform: none; }
+.prow.pickable { cursor: pointer; transition: background .12s; }
+.prow.pickable:hover { background: rgba(255, 255, 255, .05); }
+.prow.picked { background: var(--gold-soft); box-shadow: inset 3px 0 0 var(--gold); }
+.prow.picked .pname { color: var(--gold); }
+.prow.pk-ok { background: var(--ok-soft); box-shadow: inset 3px 0 0 var(--ok); }
+.prow.pk-ok .pname { color: var(--ok); }
+.prow.pk-bad { background: var(--bad-soft); box-shadow: inset 3px 0 0 var(--bad); }
+.prow.pk-bad .pname { color: #ff9b9b; text-decoration: line-through; text-decoration-color: rgba(255, 155, 155, .5); }
+.prow.pk-other .pname { color: var(--muted); }
+.pkmark { font-weight: 800; font-size: 12px; }
+.prow.picked .pkmark { color: var(--gold); }
+.prow.pk-ok .pkmark { color: var(--ok); }
+.prow.pk-bad .pkmark { color: var(--bad); }
+.match .fact { padding: 4px 10px 6px; font-size: 11.5px; color: var(--muted); border-top: 1px solid rgba(36, 48, 65, .6); }
+.match .fact b { color: var(--text); font-weight: 600; }
+.bracket.upper.pickmode { grid-template-rows: auto repeat(8, 70px); }
+.bracket.lower.pickmode { grid-template-rows: auto repeat(4, 70px); }

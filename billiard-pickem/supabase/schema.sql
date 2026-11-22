@@ -327,8 +327,8 @@ begin
            'active', br.active, 'score', m.score, 'locked', m.locked,
            'open', br.active and br.a is not null and br.b is not null
                    and br.winner is null and not m.locked,
-           'revealed', _match_revealed(m.locked, br.winner),
-           'votes', case when _match_revealed(m.locked, br.winner) then (
+           'revealed', not pred_open,
+           'votes', case when not pred_open then (
                select coalesce(jsonb_object_agg(v.player_id, v.cnt), '{}'::jsonb)
                from (select p.player_id, count(*) cnt from picks p
                       join accounts ac on ac.id = p.account_id and not ac.is_admin
@@ -350,10 +350,10 @@ begin
     'leaderboard', (select coalesce(jsonb_agg(to_jsonb(lb) order by lb.total desc, lb.correct desc, lb.name), '[]'::jsonb)
                       from public._leaderboard() lb),
     'revealed_picks', (
+      -- Сетки участников видны всем, как только пикем закрыт (начался турнир)
       select coalesce(jsonb_agg(jsonb_build_object('account', ac.name, 'match_id', p.match_id, 'player_id', p.player_id)), '[]'::jsonb)
         from picks p join accounts ac on ac.id = p.account_id
-        join matches m on m.id = p.match_id join compute_bracket() br on br.match_id = p.match_id
-       where not ac.is_admin and _match_revealed(m.locked, br.winner)),
+       where not ac.is_admin and not pred_open),
     'revealed_predictions', case when pred_open then '[]'::jsonb else (
       select coalesce(jsonb_agg(jsonb_build_object('account', ac.name, 'kind', pr.kind, 'slot', pr.slot, 'player_id', pr.player_id)), '[]'::jsonb)
         from predictions pr join accounts ac on ac.id = pr.account_id where not ac.is_admin) end,
@@ -433,35 +433,46 @@ begin
 end;
 $$;
 
-create or replace function public.save_pick(p_token uuid, p_match int, p_player int)
+-- Пикем как на мейджоре: вся сетка заполняется целиком до начала турнира.
+-- p_picks = {"<номер матча>": <id игрока-победителя>, ...}. Прогнозы должны быть согласованы:
+-- в каждом матче выбран один из двух игроков, которые попадают туда по прогнозам предыдущих матчей.
+create or replace function public.save_bracket(p_token uuid, p_picks jsonb)
 returns jsonb
 language plpgsql volatile security definer
 set search_path = public
 as $$
 declare
   acc accounts;
-  br  record;
-  m   matches;
+  w   int[] := array_fill(null::int, array[31]);
+  l   int[] := array_fill(null::int, array[31]);
+  d   record;
+  pa  int;
+  pb  int;
+  pk  int;
+  act boolean;
 begin
   acc := _session_account(p_token);
   if acc.is_admin then raise exception 'Организатор не участвует в пикеме'; end if;
-  select * into br from compute_bracket() where match_id = p_match;
-  select * into m  from matches where id = p_match;
-  if br.match_id is null then raise exception 'Нет такого матча'; end if;
-  if not br.active or br.a is null or br.b is null then
-    raise exception 'Участники матча ещё не определены';
-  end if;
-  if br.winner is not null or m.locked then
-    raise exception 'Приём прогнозов на этот матч закрыт';
-  end if;
-  if p_player is null then
-    delete from picks where account_id = acc.id and match_id = p_match;
-  elsif p_player not in (br.a, br.b) then
-    raise exception 'Этот игрок не играет в матче';
-  else
-    insert into picks (account_id, match_id, player_id) values (acc.id, p_match, p_player)
-    on conflict (account_id, match_id) do update set player_id = excluded.player_id, updated_at = now();
-  end if;
+  if not _predictions_open() then raise exception 'Пикем закрыт: турнир уже начался'; end if;
+  if p_picks is null or jsonb_typeof(p_picks) <> 'object' then raise exception 'Неверный формат пикема'; end if;
+
+  delete from picks where account_id = acc.id;
+  for d in select md.id, md.a_src, md.b_src, md.reset_of from match_defs md order by md.id loop
+    pa := case left(d.a_src, 1) when 'S' then substr(d.a_src, 2)::int
+            when 'W' then w[substr(d.a_src, 2)::int] else l[substr(d.a_src, 2)::int] end;
+    pb := case left(d.b_src, 1) when 'S' then substr(d.b_src, 2)::int
+            when 'W' then w[substr(d.b_src, 2)::int] else l[substr(d.b_src, 2)::int] end;
+    act := d.reset_of is null or (w[d.reset_of] is not null and w[d.reset_of] = pb);
+    pk := nullif(p_picks ->> d.id::text, '')::int;
+    if pk is not null then
+      if not act or pa is null or pb is null or pk not in (pa, pb) then
+        raise exception 'Прогноз на М% не совпадает с вашей сеткой — обновите страницу', d.id;
+      end if;
+      insert into picks (account_id, match_id, player_id) values (acc.id, d.id, pk);
+    end if;
+    w[d.id] := pk;
+    l[d.id] := case when pk is null then null when pk = pa then pb else pa end;
+  end loop;
   return get_state(p_token);
 end;
 $$;
@@ -603,7 +614,7 @@ grant execute on function
   public.logout(uuid),
   public.change_password(uuid, text, text),
   public.get_state(uuid),
-  public.save_pick(uuid, int, int),
+  public.save_bracket(uuid, jsonb),
   public.save_predictions(uuid, int, int[], int[]),
   public.admin_set_result(uuid, int, int, text),
   public.admin_set_lock(uuid, int, boolean),
