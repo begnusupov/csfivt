@@ -29,8 +29,6 @@
   let S = null;            // ответ get_state
   let lastJson = '';
   let token = readToken();
-  let draft = null;        // черновик прогноза на турнир
-  let draftDirty = false;
   let bracketDraft = {};   // черновик сетки пикема: {номер матча: id победителя}
   let bracketDirty = false;
   let modalRender = null;  // функция перерисовки открытой модалки
@@ -73,7 +71,6 @@
     if (token && !st.me) setToken(null);
     const json = JSON.stringify({ ...st, server_time: null });
     S = st;
-    if (!draftDirty) draft = draftFromState();
     if (!bracketDirty) bracketDraft = { ...(st.my_picks || {}) };
     // Не перерисовываем страницу, пока человек печатает в поле (например, в панели организатора)
     const typing = !force && app.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
@@ -136,11 +133,6 @@
     const pl = S.placements || {};
     if (pl['1']) { rec[pl['1']].out = '1 место'; rec[pl['2']].out = '2 место'; }
     return rec;
-  }
-  function top4Set() {
-    const s = new Set();
-    TOP4_MATCHES.forEach(id => { const m = M(id); if (m.a) s.add(m.a); if (m.b) s.add(m.b); });
-    return s;
   }
   function pickResult(m, pid) {
     if (!pid || !m.winner) return '';
@@ -354,15 +346,6 @@
 
   // ── Мой пикем ──
 
-  function draftFromState() {
-    const d = { champion: null, top4: [], zero: [] };
-    (S && S.my_predictions || []).slice().sort((a, b) => a.slot - b.slot).forEach(p => {
-      if (p.kind === 'champion') d.champion = p.player_id;
-      else d[p.kind].push(p.player_id);
-    });
-    return d;
-  }
-
   // Прогнозная сетка: участники матчей получаются из посева и прогнозов на предыдущие матчи.
   function predictBracket(picks) {
     const w = {}, l = {}, out = {};
@@ -452,12 +435,10 @@
         <div class="section-head"><h2 style="color:var(--lower)">Нижняя сетка</h2></div>
         <div class="bracket-wrap"><div class="bracket lower pickmode" id="bLower" style="grid-template-columns:repeat(${LOWER_COLS.length},minmax(200px,1fr))">${bracketCols(LOWER_COLS)}${Object.entries(LOWER_LAYOUT).map(([id, pos]) => pickCard(M(+id), pos, pr, editable)).join('')}</div></div>
         <div class="legend"><span>+N — очки за угаданного победителя матча</span>${open ? '' : '<span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span><span>«факт» — кто выиграл на самом деле</span>'}</div>
-      </div>
-      ${own ? `<div class="section panel" id="challenge">${challengeHtml()}</div>` : ''}`;
+      </div>`;
 
     [...app.querySelectorAll('.bracket-wrap')].forEach((e, i) => { if (scrolls[i]) e.scrollLeft = scrolls[i]; });
     requestAnimationFrame(drawAllLines);
-    if (own) bindChallenge();
     if (!editable) return;
 
     app.querySelectorAll('.prow[data-pp]').forEach(el => {
@@ -517,73 +498,6 @@
       <div class="mh"><span>${matchTitle(m)}</span><span class="to">${right}</span></div>${rowHtml('a')}${rowHtml('b')}${fact}</div>`;
   }
 
-  function challengeHtml() {
-    const open = S.predictions_open;
-    const rec = playerRecords();
-    const t4 = top4Set();
-    const pl = S.placements || {};
-    const d = draft;
-    const verdict = (kind, pid) => {
-      if (open) return '';
-      const r = rec[pid];
-      if (kind === 'champion') return pl['1'] ? (pl['1'] === pid ? 'ok' : 'bad') : (r.losses >= 2 ? 'bad' : '');
-      if (kind === 'top4') return t4.has(pid) ? 'ok' : (r.losses >= 2 ? 'bad' : '');
-      if (kind === 'zero') return r.wins >= 1 ? 'bad' : (r.losses >= 2 ? 'ok' : '');
-      return '';
-    };
-    const chips = (kind, selected, blocked) => `<div class="players-grid">${S.players.map(p => {
-      const sel = selected.includes(p.id);
-      const dis = !open || (!sel && blocked.includes(p.id));
-      return `<button class="pchip ${sel ? 'sel ' + verdict(kind, p.id) : ''}" data-kind="${kind}" data-pid="${p.id}" ${dis ? 'disabled' : ''}><small>№${p.id}</small><b>${esc(p.name)}</b></button>`;
-    }).join('')}</div>`;
-    const champSel = d.champion ? [d.champion] : [];
-    return `
-      <div class="section-head" style="margin-bottom:6px">
-        <h2>Бонус-прогноз</h2>
-        ${open ? '<span class="tag gold">открыт до начала первого матча</span>' : '<span class="tag">закрыт</span>'}
-      </div>
-      <p class="muted" style="margin:0 0 16px;font-size:13.5px">Дополнительные очки к сетке: чемпион, четвёрка призёров и те, кто вылетит без побед. Сохраняется отдельно.</p>
-      <div class="challenge">
-        <div class="ch-row"><h3>🏆 Чемпион <span class="tag gold">5 очков</span></h3><p class="hint">Кто выиграет турнир</p>${chips('champion', champSel, d.zero)}</div>
-        <div class="ch-row"><h3>Топ-4 <span class="tag gold">по 1 очку</span> <span class="dim" style="font-size:13px;font-family:Inter">${d.top4.length}/4</span></h3><p class="hint">Кто займёт места с 1-го по 4-е (порядок не важен)</p>${chips('top4', d.top4, d.top4.length >= 4 ? S.players.map(p => p.id) : d.zero)}</div>
-        <div class="ch-row"><h3>Вылет с 0–2 <span class="tag gold">по 1 очку</span> <span class="dim" style="font-size:13px;font-family:Inter">${d.zero.length}/2</span></h3><p class="hint">Кто проиграет два матча, не выиграв ни одного</p>${chips('zero', d.zero, d.zero.length >= 2 ? S.players.map(p => p.id) : [...d.top4, ...champSel])}</div>
-        ${open ? `<div class="savebar"><button class="btn primary" id="saveChallenge" ${draftDirty ? '' : 'disabled'}>Сохранить прогноз</button>
-          <span class="muted" style="font-size:13px">${draftDirty ? 'Есть несохранённые изменения' : (S.my_predictions && S.my_predictions.length ? 'Сохранено ✓' : 'Ещё не заполнен')}</span></div>` : ''}
-      </div>`;
-  }
-
-  function bindChallenge() {
-    const box = document.getElementById('challenge');
-    if (!box) return;
-    box.querySelectorAll('.pchip').forEach(el => {
-      el.onclick = () => {
-        const kind = el.dataset.kind, pid = +el.dataset.pid;
-        if (kind === 'champion') draft.champion = draft.champion === pid ? null : pid;
-        else {
-          const arr = draft[kind];
-          const i = arr.indexOf(pid);
-          if (i >= 0) arr.splice(i, 1); else arr.push(pid);
-        }
-        draftDirty = true;
-        box.innerHTML = challengeHtml();
-        bindChallenge();
-      };
-    });
-    const save = document.getElementById('saveChallenge');
-    if (save) save.onclick = async () => {
-      save.disabled = true;
-      try {
-        const st = await rpc('save_predictions', { p_token: token, p_champion: draft.champion, p_top4: draft.top4, p_zero: draft.zero });
-        draftDirty = false;
-        applyState(st, true);
-        toast('Бонус-прогноз сохранён', 'ok');
-      } catch (e) {
-        toast(e.message, 'bad');
-        save.disabled = false;
-      }
-    };
-  }
-
   // ── Таблица пикема ──
 
   function viewLeaderboard() {
@@ -597,18 +511,16 @@
         <td><span class="rank ${rank <= 3 && x.total > 0 ? 'r' + rank : ''}">${rank}</span></td>
         <td><span class="lb-name">${esc(x.name)}${isMe ? ' <span class="tag gold">вы</span>' : ''}</span></td>
         <td class="num"><span class="total">${x.total}</span></td>
-        <td class="num hide-sm">${x.match_pts}</td>
-        <td class="num hide-sm">${x.pred_pts}</td>
         <td class="num"><b class="${x.correct ? 'okc' : 'dim'}">${x.correct}</b></td>
         <td class="num hide-sm">${x.picked}</td>
       </tr>`;
     }).join('');
-    const maxPts = S.matches.filter(m => m.active || !M(GF).winner).reduce((a, m) => a + m.points, 0) + 11;
+    const maxPts = S.matches.filter(m => m.active || !M(GF).winner).reduce((a, m) => a + m.points, 0);
     app.innerHTML = `
       <div class="hero"><div><h1>Таблица пикема</h1><p>Обновляется автоматически после каждого результата. После начала турнира нажмите на участника, чтобы увидеть его сетку.</p></div></div>
       <div class="panel section" style="padding:6px 8px">
         <table class="tbl">
-          <thead><tr><th>#</th><th>Участник</th><th class="num">Очки</th><th class="num hide-sm">Сетка</th><th class="num hide-sm">Бонус</th><th class="num">Угадано</th><th class="num hide-sm">Прогнозов</th></tr></thead>
+          <thead><tr><th>#</th><th>Участник</th><th class="num">Очки</th><th class="num">Угадано</th><th class="num hide-sm">Прогнозов</th></tr></thead>
           <tbody>${rows || '<tr><td colspan="7" class="muted">Пока пусто</td></tr>'}</tbody>
         </table>
       </div>
@@ -650,38 +562,6 @@
     return `<div class="gridwrap"><table class="pgrid"><thead><tr><th class="gname">Участник</th>${head}<th>Угадано</th></tr></thead><tbody>${rows.map(r => r.html).join('')}</tbody></table></div>`;
   }
 
-  function openUser(name) {
-    modalRender = () => {
-      const picks = (S.revealed_picks || []).filter(p => p.account === name).sort((a, b) => M(a.match_id).play_order - M(b.match_id).play_order || a.match_id - b.match_id);
-      const preds = (S.revealed_predictions || []).filter(p => p.account === name);
-      const row = S.leaderboard.find(x => x.name === name) || {};
-      const own = me() && me().name === name;
-      const kindLabel = { champion: 'Чемпион', top4: 'Топ-4', zero: '0–2' };
-      document.getElementById('modalBody').innerHTML = `
-        <h2>${esc(name)}</h2>
-        <div class="stats" style="margin-bottom:14px">
-          <div class="stat"><b>${row.total ?? 0}</b><span>очков</span></div>
-          <div class="stat"><b>${row.match_pts ?? 0}</b><span>за матчи</span></div>
-          <div class="stat"><b>${row.pred_pts ?? 0}</b><span>за турнир</span></div>
-        </div>
-        <h3 style="margin-bottom:8px">Прогнозы на матчи</h3>
-        <div class="picklist">${picks.length ? picks.map(p => {
-          const m = M(p.match_id);
-          const r = pickResult(m, p.player_id);
-          return `<div class="pi"><span><span class="dim">М${m.id}</span> ${m.a ? esc(P(m.a)) : '?'} – ${m.b ? esc(P(m.b)) : '?'}</span><span><b>${esc(P(p.player_id))}</b> ${r === 'ok' ? `<span class="tag ok">+${m.points}</span>` : r === 'bad' ? '<span class="tag bad">0</span>' : '<span class="tag">идёт</span>'}</span></div>`;
-        }).join('') : '<div class="dim" style="font-size:13px">Открытых прогнозов пока нет.</div>'}</div>
-        <h3 style="margin:16px 0 8px">Прогноз на турнир</h3>
-        ${S.predictions_open
-          ? `<div class="dim" style="font-size:13px">${own ? 'Ваш прогноз виден только вам до начала турнира.' : 'Откроется после начала турнира.'}</div>`
-          : `<div class="picklist">${preds.length ? ['champion', 'top4', 'zero'].map(k => {
-              const ps = preds.filter(p => p.kind === k).sort((a, b) => a.slot - b.slot);
-              return ps.length ? `<div class="pi"><span class="muted">${kindLabel[k]}</span><b>${ps.map(p => esc(P(p.player_id))).join(', ')}</b></div>` : '';
-            }).join('') : '<div class="dim" style="font-size:13px">Не заполнен.</div>'}</div>`}`;
-    };
-    showModal();
-    modalRender();
-  }
-
   // ── Правила ──
 
   function viewRules() {
@@ -709,7 +589,6 @@
             <li>Сетку можно менять сколько угодно, пока не начат первый матч. Потом она закрывается для всех.</li>
             <li>Очки дают за каждый матч, где угадан победитель — даже если по вашей сетке в этом матче играл кто-то другой, важно, кого вы поставили победителем.</li>
             <li>Чужие сетки и проценты «кто за кого» открываются, когда начинается турнир.</li>
-            <li>Бонус-прогноз (чемпион, топ-4, вылет с 0–2) — дополнительные очки, закрывается тогда же.</li>
             <li>Можно ставить и на себя, и против себя.</li>
           </ol>
         </div>
@@ -718,15 +597,7 @@
           <table class="tbl"><tbody>
             ${Object.keys(byPts).sort((a, b) => a - b).map(p => `<tr><td><b>+${pts(+p)}</b></td><td class="muted">${byPts[p].join(', ')}</td></tr>`).join('')}
           </tbody></table>
-        </div>
-        <div class="panel">
-          <h2>Бонус-прогноз</h2>
-          <table class="tbl"><tbody>
-            <tr><td><b>+5 очков</b></td><td class="muted">угаданный чемпион</td></tr>
-            <tr><td><b>+1 очко</b></td><td class="muted">за каждого угаданного игрока в топ-4 (до 4 очков)</td></tr>
-            <tr><td><b>+1 очко</b></td><td class="muted">за каждого угаданного игрока, вылетевшего с 0–2 (до 2 очков)</td></tr>
-          </tbody></table>
-          <p class="dim" style="font-size:13px;margin-bottom:0">При равенстве очков выше тот, у кого больше угаданных прогнозов.</p>
+          <p class="dim" style="font-size:13px;margin-bottom:0">Максимум — ${S.matches.filter(m => !m.reset_of).reduce((a, m) => a + m.points, 0)} очков (+5, если понадобится М15). При равенстве очков выше тот, у кого больше угаданных матчей.</p>
         </div>
       </div>`;
   }
@@ -867,7 +738,7 @@
         const r = await rpc('login', { p_name: document.getElementById('lName').value, p_password: document.getElementById('lPass').value });
         if (r.error) throw new Error(r.error);
         setToken(r.token);
-        draftDirty = false; bracketDirty = false;
+        bracketDirty = false;
         hideModal();
         await refresh();
         toast(`Привет, ${r.name}!`, 'ok');
@@ -907,7 +778,7 @@
     document.getElementById('logoutBtn').onclick = async () => {
       try { await rpc('logout', { p_token: token }); } catch { /* всё равно выходим */ }
       setToken(null);
-      draftDirty = false; bracketDirty = false;
+      bracketDirty = false;
       hideModal();
       await refresh();
       toast('Вы вышли');
