@@ -322,7 +322,10 @@
         const cls = ['side', canPick ? '' : 'disabled', picked ? 'picked' : '', res, m.winner === pid ? 'won' : '', m.loser === pid ? 'lost' : ''].join(' ');
         return `<div class="${cls}" data-pick="${pid}"><small>№${pid}</small><b>${esc(P(pid))}</b></div>`;
       };
-      const byPlayer = pid => picks.filter(p => p.player_id === pid).map(p => esc(p.account));
+      const byPlayer = pid => picks.filter(p => p.player_id === pid).map(p => {
+        const cls = m.winner ? (pid === m.winner ? 'okc' : 'badc') : '';
+        return `<span class="${cls}">${esc(p.account)}</span>`;
+      });
       let status;
       if (!m.active) status = M(GF).winner ? 'Матч не понадобился: суперфинал выиграл игрок верхней сетки.' : `Играется, только если суперфинал (М${GF}) выиграет игрок из нижней сетки.`;
       else if (m.winner) status = `Победитель: <b>${esc(P(m.winner))}</b>${m.score ? ` · счёт ${esc(m.score)}` : ''}`;
@@ -540,7 +543,7 @@
         <td class="num"><span class="total">${x.total}</span></td>
         <td class="num hide-sm">${x.match_pts}</td>
         <td class="num hide-sm">${x.pred_pts}</td>
-        <td class="num">${x.correct}</td>
+        <td class="num"><b class="${x.correct ? 'okc' : 'dim'}">${x.correct}</b></td>
         <td class="num hide-sm">${x.picked}</td>
       </tr>`;
     }).join('');
@@ -553,8 +556,35 @@
           <tbody>${rows || '<tr><td colspan="7" class="muted">Пока пусто</td></tr>'}</tbody>
         </table>
       </div>
-      <p class="dim" style="font-size:13px">Максимум возможных очков: ${maxPts}. При равенстве очков выше тот, у кого больше угаданных прогнозов. Чужие прогнозы видны после того, как матч начался.</p>`;
+      <p class="dim" style="font-size:13px">Максимум возможных очков: ${maxPts}. При равенстве очков выше тот, у кого больше угаданных прогнозов. Чужие прогнозы видны после того, как матч начался.</p>
+      <div class="section">
+        <div class="section-head"><h2>Кто что угадал</h2><span class="muted">Прогнозы по матчам — открываются, когда матч начался</span></div>
+        <div class="panel" style="padding:10px">${picksGridHtml()}</div>
+        <div class="legend"><span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span><span><i style="background:var(--line2)"></i>матч идёт</span><span>— нет прогноза</span></div>
+      </div>`;
     app.querySelectorAll('tr[data-name]').forEach(tr => { tr.onclick = () => openUser(tr.dataset.name); });
+  }
+
+  function picksGridHtml() {
+    const ms = S.matches.filter(m => m.revealed && m.active).sort((a, b) => a.play_order - b.play_order || a.id - b.id);
+    if (!ms.length) return '<div class="dim" style="padding:14px;text-align:center">Сводка появится, когда начнётся первый матч — до этого прогнозы скрыты.</div>';
+    const pickOf = {};
+    (S.revealed_picks || []).forEach(p => { pickOf[`${p.account}|${p.match_id}`] = p.player_id; });
+    const decided = ms.filter(m => m.winner).length;
+    const rows = (S.leaderboard || []).map(x => {
+      let ok = 0;
+      const cells = ms.map(m => {
+        const pid = pickOf[`${x.name}|${m.id}`];
+        if (!pid) return '<td class="gc none">—</td>';
+        let cls = 'pend';
+        if (m.winner) { if (pid === m.winner) { ok++; cls = 'ok'; } else cls = 'bad'; }
+        return `<td class="gc ${cls}">${esc(P(pid))}</td>`;
+      }).join('');
+      const isMe = me() && me().name === x.name;
+      return { ok, html: `<tr${isMe ? ' class="me"' : ''}><td class="gname">${esc(x.name)}</td>${cells}<td class="gc total"><b class="${ok ? 'okc' : 'dim'}">${ok}</b><span class="dim">/${decided}</span></td></tr>` };
+    }).sort((a, b) => b.ok - a.ok);
+    const head = ms.map(m => `<th>М${m.id}<small>${m.winner ? esc(P(m.winner)) : 'идёт'}</small></th>`).join('');
+    return `<div class="gridwrap"><table class="pgrid"><thead><tr><th class="gname">Участник</th>${head}<th>Угадано</th></tr></thead><tbody>${rows.map(r => r.html).join('')}</tbody></table></div>`;
   }
 
   function openUser(name) {
@@ -652,6 +682,9 @@
 
       <div class="panel section">
         <div class="section-head"><h2>Матчи</h2><span class="muted">«Начать матч» закрывает приём прогнозов. Результат тоже закрывает приём.</span></div>
+        <div class="savebar" style="margin-bottom:6px">
+          <button class="btn small" id="lockAll" ${S.matches.some(m => m.open) ? '' : 'disabled'}>Закрыть приём на все открытые матчи (${S.matches.filter(m => m.open).length})</button>
+        </div>
         ${ms.map(m => {
           const ready = m.active && m.a && m.b;
           const sc = scoreDraft[m.id] ?? m.score ?? '';
@@ -697,6 +730,16 @@
       </div>`;
 
     app.querySelectorAll('[data-score]').forEach(el => { el.oninput = () => { scoreDraft[el.dataset.score] = el.value; }; });
+    document.getElementById('lockAll').onclick = async () => {
+      const ids = S.matches.filter(m => m.open).map(m => m.id);
+      if (!ids.length || !confirm(`Закрыть приём прогнозов на ${ids.map(id => 'М' + id).join(', ')}?`)) return;
+      try {
+        let st = null;
+        for (const id of ids) st = await rpc('admin_set_lock', { p_token: token, p_match: id, p_locked: true });
+        applyState(st, true);
+        toast(`Приём закрыт: ${ids.map(id => 'М' + id).join(', ')}`, 'ok');
+      } catch (e) { toast(e.message, 'bad'); refresh(true); }
+    };
     app.querySelectorAll('[data-win]').forEach(el => {
       el.onclick = async () => {
         const id = +el.dataset.win, pid = +el.dataset.pid, m = M(id);

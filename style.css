@@ -358,3 +358,19 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
   .brand-title { font-size: 15px; }
   .chip-user .uname { display: none; }
 }
+
+/* ── Сводка «кто что угадал» ── */
+.okc { color: var(--ok); }
+.badc { color: #ff9b9b; }
+.gridwrap { overflow-x: auto; }
+table.pgrid { border-collapse: separate; border-spacing: 3px; font-size: 13px; }
+.pgrid th { font-size: 11.5px; color: var(--muted); font-weight: 700; text-align: center; padding: 4px 6px; white-space: nowrap; }
+.pgrid th small { display: block; color: var(--dim); font-weight: 500; font-size: 11px; }
+.pgrid td { padding: 7px 9px; border-radius: 7px; text-align: center; white-space: nowrap; }
+.pgrid .gname { position: sticky; left: 0; z-index: 1; background: var(--panel); text-align: left; font-weight: 600; padding-right: 12px; }
+.pgrid tr.me .gname { color: var(--gold); }
+.gc.ok { background: var(--ok-soft); color: var(--ok); border: 1px solid rgba(62, 207, 142, .35); font-weight: 600; }
+.gc.bad { background: var(--bad-soft); color: #ff9b9b; border: 1px solid rgba(239, 91, 91, .3); }
+.gc.pend { background: var(--panel2); border: 1px solid var(--line2); }
+.gc.none { color: var(--dim); }
+.gc.total { font-size: 15px; font-family: Unbounded, sans-serif; }
