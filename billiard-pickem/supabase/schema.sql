@@ -86,7 +86,7 @@ revoke all on all sequences in schema public from anon, authenticated;
 
 insert into public.players (id, name) values
   (1, 'Кутя'), (2, 'Шер'), (3, 'Иса'), (4, 'Ильяс'),
-  (5, 'Керим'), (6, 'Алтай'), (7, 'Арлен'), (8, 'Бекжа')
+  (5, 'Керим'), (6, 'Атай'), (7, 'Арлен'), (8, 'Бекжа')
 on conflict (id) do update set name = excluded.name;
 
 -- Сетка на 8 игроков: 1/4 финала по посеву 1–8, 4–5, 2–7, 3–6.
