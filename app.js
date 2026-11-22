@@ -31,6 +31,8 @@
   let token = readToken();
   let draft = null;        // черновик прогноза на турнир
   let draftDirty = false;
+  let bracketDraft = {};   // черновик сетки пикема: {номер матча: id победителя}
+  let bracketDirty = false;
   let modalRender = null;  // функция перерисовки открытой модалки
   let pending = 0;
 
@@ -72,6 +74,7 @@
     const json = JSON.stringify({ ...st, server_time: null });
     S = st;
     if (!draftDirty) draft = draftFromState();
+    if (!bracketDirty) bracketDraft = { ...(st.my_picks || {}) };
     // Не перерисовываем страницу, пока человек печатает в поле (например, в панели организатора)
     const typing = !force && app.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
     if (typing) return;
@@ -151,6 +154,7 @@
   // ───────────── Рендер ─────────────
 
   function route() { return (location.hash.replace(/^#\/?/, '') || 'bracket').split('?')[0]; }
+  function routeParam(name) { return new URLSearchParams(location.hash.split('?')[1] || '').get(name); }
 
   function render() {
     if (!S) return;
@@ -185,7 +189,6 @@
     const lb = S.leaderboard || [];
     const done = S.matches.filter(m => m.winner).length;
     const total = M(RESET).active ? 15 : 14;
-    const openCnt = S.matches.filter(m => m.open).length;
 
     app.innerHTML = `
       <div class="hero">
@@ -195,7 +198,7 @@
         </div>
         <div class="stats">
           <div class="stat"><b>${done}/${total}</b><span>сыграно партий</span></div>
-          <div class="stat"><b>${openCnt}</b><span>открыто для прогноза</span></div>
+          <div class="stat"><b>${S.predictions_open ? 'открыт' : 'закрыт'}</b><span>пикем</span></div>
           <div class="stat"><b>${lb.filter(x => x.picked > 0).length}</b><span>участвуют в пикеме</span></div>
         </div>
       </div>
@@ -209,8 +212,8 @@
         <div class="section-head"><h2 style="color:var(--lower)">Нижняя сетка</h2><span class="muted">Второе поражение — выбывание. Оранжевым — игроки, пришедшие из верхней сетки</span></div>
         <div class="bracket-wrap"><div class="bracket lower" id="bLower" style="grid-template-columns:repeat(${LOWER_COLS.length},minmax(200px,1fr))">${bracketCols(LOWER_COLS)}${Object.entries(LOWER_LAYOUT).map(([id, pos]) => matchCard(M(+id), pos)).join('')}</div></div>
         <div class="legend">
-          ${me() && !me().is_admin ? '<span><i style="background:var(--gold)"></i>мой прогноз</span><span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span>' : ''}
-          <span>% — доля участников пикема, выбравших игрока (видно после начала матча)</span>
+          ${me() && !me().is_admin ? '<span><i style="background:var(--gold)"></i>мой пикем</span><span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span>' : ''}
+          <span>% — доля участников, поставивших на игрока в этом матче (видно после начала турнира)</span>
         </div>
       </div>
 
@@ -270,8 +273,7 @@
     };
     let right = esc(m.loser_to || '');
     if (m.id === RESET) right = m.active ? 'играется' : (M(GF).winner ? 'не нужен' : '');
-    if (m.open && isPlayer() && !myPick(m.id)) right = '<span class="openflag">● сделать прогноз</span>';
-    else if (m.locked && !m.winner) right = '<span class="openflag">идёт</span>';
+    if (m.locked && !m.winner) right = '<span class="openflag">идёт</span>';
     if (m.score) right = `<span class="score">${esc(m.score)}</span>`;
         return `<div class="match ${m.bracket} ${m.active || !M(GF).winner ? '' : 'inactive'}" data-match="${m.id}" style="grid-column:${col};grid-row:${row + 1} / span 2">
       <div class="mh"><span>${matchTitle(m)}</span><span class="to">${right}</span></div>${row1('a')}${row1('b')}</div>`;
@@ -313,7 +315,7 @@
     modalRender = () => {
       const m = M(id);
       const picks = (S.revealed_picks || []).filter(p => p.match_id === id);
-      const canPick = isPlayer() && m.open;
+      const canPick = false;
       const sideBtn = side => {
         const pid = m[side];
         if (!pid) return `<div class="side tbd disabled"><small>${m[side + '_src'][0] === 'S' ? '' : 'ожидается'}</small><b>${srcLabel(m[side + '_src'])}</b></div>`;
@@ -329,8 +331,8 @@
       let status;
       if (!m.active) status = M(GF).winner ? 'Матч не понадобился: суперфинал выиграл игрок верхней сетки.' : `Играется, только если суперфинал (М${GF}) выиграет игрок из нижней сетки.`;
       else if (m.winner) status = `Победитель: <b>${esc(P(m.winner))}</b>${m.score ? ` · счёт ${esc(m.score)}` : ''}`;
-      else if (m.locked) status = 'Матч идёт — приём прогнозов закрыт.';
-      else if (m.open) status = isPlayer() ? 'Приём прогнозов открыт — выберите победителя.' : (me() ? 'Приём прогнозов открыт.' : 'Приём прогнозов открыт. Войдите, чтобы сделать прогноз.');
+      else if (m.locked) status = 'Матч идёт.';
+      else if (m.open) status = 'Матч ещё не начался.';
       else status = 'Участники ещё не определены.';
 
       document.getElementById('modalBody').innerHTML = `
@@ -339,36 +341,15 @@
         <p class="muted" style="margin:14px 0 6px">${status}</p>
         <p class="dim" style="margin:0 0 12px;font-size:13px">За угаданного победителя: +${pts(m.points)}${m.loser_to ? ` · ${esc(m.loser_to)}` : ''}</p>
         ${m.revealed ? `
-          <h3 style="margin:14px 0 8px">Прогнозы участников</h3>
+          <h3 style="margin:14px 0 8px">Кто на кого поставил</h3>
           ${m.a && m.b ? `<div class="picklist">
             <div class="pi"><b>${esc(P(m.a))}</b><span class="muted">${byPlayer(m.a).join(', ') || '—'}</span></div>
             <div class="pi"><b>${esc(P(m.b))}</b><span class="muted">${byPlayer(m.b).join(', ') || '—'}</span></div>
-          </div>` : ''}` : (m.a && m.b && m.active ? '<p class="dim" style="font-size:13px">Чужие прогнозы откроются, когда начнётся матч.</p>' : '')}
-        ${!me() && m.open ? '<button class="btn primary" id="mLogin" style="margin-top:8px">Войти и сделать прогноз</button>' : ''}`;
+          </div>` : ''}` : '<p class="dim" style="font-size:13px">Сетки участников откроются, когда начнётся турнир.</p>'}`;
 
-      document.querySelectorAll('#modalBody [data-pick]').forEach(el => {
-        if (canPick) el.onclick = () => savePick(id, +el.dataset.pick);
-      });
-      const lb = document.getElementById('mLogin');
-      if (lb) lb.onclick = openLogin;
     };
     showModal();
     modalRender();
-  }
-
-  async function savePick(matchId, pid) {
-    if (myPick(matchId) === pid) return;
-    const prev = myPick(matchId);
-    S.my_picks = { ...(S.my_picks || {}), [matchId]: pid };
-    render(); if (modalRender) modalRender();
-    try {
-      applyState(await rpc('save_pick', { p_token: token, p_match: matchId, p_player: pid }), true);
-      toast(`Прогноз на М${matchId}: ${P(pid)}`, 'ok');
-    } catch (e) {
-      S.my_picks[matchId] = prev;
-      toast(e.message, 'bad');
-      refresh(true);
-    }
   }
 
   // ── Мой пикем ──
@@ -382,83 +363,158 @@
     return d;
   }
 
+  // Прогнозная сетка: участники матчей получаются из посева и прогнозов на предыдущие матчи.
+  function predictBracket(picks) {
+    const w = {}, l = {}, out = {};
+    const res = src => src[0] === 'S' ? +src.slice(1) : src[0] === 'W' ? (w[+src.slice(1)] || null) : (l[+src.slice(1)] || null);
+    S.matches.slice().sort((a, b) => a.id - b.id).forEach(m => {
+      const a = res(m.a_src), b = res(m.b_src);
+      const active = !m.reset_of || (w[m.reset_of] != null && w[m.reset_of] === b);
+      const p = picks[m.id];
+      const win = active && a && b && (p === a || p === b) ? p : null;
+      w[m.id] = win;
+      l[m.id] = win ? (win === a ? b : a) : null;
+      out[m.id] = { a, b, winner: win, loser: l[m.id], active };
+    });
+    return out;
+  }
+  function cleanPicks(picks) {
+    const pr = predictBracket(picks), c = {};
+    Object.keys(picks).forEach(id => { if (pr[id] && pr[id].winner === picks[id]) c[id] = picks[id]; });
+    return c;
+  }
+  function predictedChampion(pr) {
+    const gf = pr[GF], rs = pr[RESET];
+    if (!gf || !gf.winner) return null;
+    if (gf.winner === gf.a) return gf.a;
+    return rs && rs.winner ? rs.winner : null;
+  }
+
   function viewPickem() {
-    if (!me()) {
-      app.innerHTML = `<div class="pk-banner"><div><h1>Пикем</h1><p>Угадывайте победителей матчей и итоговые места. Войдите под своим именем, чтобы делать прогнозы.</p></div><button class="btn primary" id="pkLogin">Войти</button></div>`;
+    const other = routeParam('u');
+    if (!me() && !other) {
+      app.innerHTML = `<div class="pk-banner"><div><h1>Пикем</h1><p>Как на мейджоре: до начала турнира заполните всю сетку — выберите победителя каждого матча. Войдите под своим именем.</p></div><button class="btn primary" id="pkLogin">Войти</button></div>`;
       document.getElementById('pkLogin').onclick = openLogin;
       return;
     }
-    if (me().is_admin) {
-      app.innerHTML = `<div class="pk-banner"><div><h1>Пикем</h1><p>Аккаунт организатора не участвует в пикеме. Результаты матчей вносятся на вкладке «Организатор».</p></div><a class="btn primary" href="#/admin">К панели организатора</a></div>`;
+    if (me() && me().is_admin && !other) {
+      app.innerHTML = `<div class="pk-banner"><div><h1>Пикем</h1><p>Аккаунт организатора не участвует в пикеме. Сетки участников можно посмотреть в «Таблице» после начала турнира.</p></div><a class="btn primary" href="#/leaderboard">К таблице</a></div>`;
       return;
     }
+    const own = !other || (me() && me().name === other);
+    const name = own ? me().name : other;
+    const open = S.predictions_open;
+    if (!own && open) {
+      app.innerHTML = `<div class="empty">Сетка участника «${esc(name)}» откроется, когда начнётся турнир.<br><br><a class="btn" href="#/leaderboard">Назад к таблице</a></div>`;
+      return;
+    }
+    let picks;
+    if (own) picks = bracketDraft;
+    else {
+      picks = {};
+      (S.revealed_picks || []).filter(p => p.account === name).forEach(p => { picks[p.match_id] = p.player_id; });
+    }
+    const editable = own && open;
+    const pr = predictBracket(picks);
+    const needed = S.matches.filter(m => pr[m.id].active).length;
+    const filled = S.matches.filter(m => pr[m.id].active && pr[m.id].winner).length;
+    const champ = predictedChampion(pr);
     const lb = S.leaderboard || [];
-    const mine = lb.find(x => x.name === me().name) || { total: 0, correct: 0 };
-    const rank = 1 + lb.filter(x => x.total > mine.total || (x.total === mine.total && x.correct > mine.correct)).length;
-    const openNoPick = S.matches.filter(m => m.open && !myPick(m.id));
+    const row = lb.find(x => x.name === name) || { total: 0, correct: 0, match_pts: 0 };
+    const rank = 1 + lb.filter(x => x.total > row.total || (x.total === row.total && x.correct > row.correct)).length;
+    const scrolls = [...app.querySelectorAll('.bracket-wrap')].map(e => e.scrollLeft);
 
     app.innerHTML = `
       <div class="pk-banner">
-        <div><h1>Пикем · ${esc(me().name)}</h1><p>Прогнозы на матч принимаются, пока организатор не начал матч. Чужие прогнозы видны после начала.</p></div>
+        <div>
+          <h1>Пикем · ${esc(name)}</h1>
+          <p>${editable ? 'Нажмите на игрока, который выиграет матч, — он пройдёт дальше, проигравший уйдёт в нижнюю сетку. Сетку можно менять до начала первого матча.'
+            : 'Пикем закрыт. Зелёный — угадал победителя матча, красный — мимо.'}</p>
+        </div>
         <div class="stats">
-          <div class="stat"><b>${mine.total}</b><span>${plural(mine.total, 'очко', 'очка', 'очков')}</span></div>
-          <div class="stat"><b>${rank}<span style="font-size:13px;color:var(--muted)">/${lb.length}</span></b><span>место</span></div>
-          <div class="stat"><b>${mine.correct}</b><span>угадано</span></div>
+          ${open ? `<div class="stat"><b>${filled}/${needed}</b><span>заполнено</span></div>` : `<div class="stat"><b>${row.total}</b><span>${plural(row.total, 'очко', 'очка', 'очков')}</span></div><div class="stat"><b>${rank}<span style="font-size:13px;color:var(--muted)">/${lb.length}</span></b><span>место</span></div>`}
+          <div class="stat"><b style="font-size:16px">${champ ? esc(P(champ)) : '—'}</b><span>чемпион по пикему</span></div>
         </div>
       </div>
-      ${openNoPick.length ? `<div class="panel" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-color:rgba(242,184,75,.4)">
-        <span>Ждут вашего прогноза: <b>${openNoPick.map(m => 'М' + m.id).join(', ')}</b></span>
-        <button class="btn small" id="toOpen">Перейти</button></div>` : ''}
-
-      <div class="section panel" id="challenge">${challengeHtml()}</div>
+      ${editable ? `<div class="savebar pk-save" id="pkSave">
+        <button class="btn primary" id="saveBracket" ${bracketDirty ? '' : 'disabled'}>Сохранить пикем</button>
+        <button class="btn small ghost" id="undoBracket" ${bracketDirty ? '' : 'disabled'}>Отменить изменения</button>
+        <button class="btn small ghost" id="clearBracket" ${Object.keys(picks).length ? '' : 'disabled'}>Очистить</button>
+        <span class="muted" style="font-size:13px">${bracketDirty ? '<span style="color:var(--gold)">● есть несохранённые изменения</span>' : (filled ? 'Сохранено ✓' : 'Сетка пустая')}</span>
+      </div>` : ''}
+      ${!own ? `<p style="margin:12px 0 0"><a class="btn small" href="#/leaderboard">← К таблице</a></p>` : ''}
 
       <div class="section">
-        <div class="section-head"><h2>Прогнозы на матчи</h2><span class="muted">Нажмите на игрока, который, по-вашему, выиграет</span></div>
-        ${Object.entries(STAGES).map(([step, label]) => {
-          const ms = visibleMatches().filter(m => m.play_order === +step);
-          if (!ms.length) return '';
-          return `<div class="stage"><div class="stage-title"><span class="step">${step}</span><h3>${label}</h3></div>
-            <div class="vs-list">${ms.map(vsCard).join('')}</div></div>`;
-        }).join('')}
-      </div>`;
+        <div class="section-head"><h2>Верхняя сетка</h2></div>
+        <div class="bracket-wrap"><div class="bracket upper pickmode" id="bUpper" style="grid-template-columns:repeat(${UPPER_COLS.length},minmax(200px,1fr))">${bracketCols(UPPER_COLS)}${Object.entries(UPPER_LAYOUT).map(([id, pos]) => pickCard(M(+id), pos, pr, editable)).join('')}</div></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h2 style="color:var(--lower)">Нижняя сетка</h2></div>
+        <div class="bracket-wrap"><div class="bracket lower pickmode" id="bLower" style="grid-template-columns:repeat(${LOWER_COLS.length},minmax(200px,1fr))">${bracketCols(LOWER_COLS)}${Object.entries(LOWER_LAYOUT).map(([id, pos]) => pickCard(M(+id), pos, pr, editable)).join('')}</div></div>
+        <div class="legend"><span>+N — очки за угаданного победителя матча</span>${open ? '' : '<span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span><span>«факт» — кто выиграл на самом деле</span>'}</div>
+      </div>
+      ${own ? `<div class="section panel" id="challenge">${challengeHtml()}</div>` : ''}`;
 
-    bindChallenge();
-    app.querySelectorAll('.vs [data-pick]').forEach(el => {
-      el.onclick = () => savePick(+el.dataset.match, +el.dataset.pick);
+    [...app.querySelectorAll('.bracket-wrap')].forEach((e, i) => { if (scrolls[i]) e.scrollLeft = scrolls[i]; });
+    requestAnimationFrame(drawAllLines);
+    if (own) bindChallenge();
+    if (!editable) return;
+
+    app.querySelectorAll('.prow[data-pp]').forEach(el => {
+      el.onclick = () => {
+        const mid = +el.dataset.pm, pid = +el.dataset.pp;
+        const next = { ...bracketDraft };
+        if (next[mid] === pid) delete next[mid]; else next[mid] = pid;
+        bracketDraft = cleanPicks(next);
+        bracketDirty = true;
+        viewPickem();
+      };
     });
-    const to = document.getElementById('toOpen');
-    if (to) to.onclick = () => {
-      const el = app.querySelector(`.vs[data-id="${openNoPick[0].id}"]`);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.getElementById('saveBracket').onclick = async ev => {
+      ev.target.disabled = true;
+      try {
+        const st = await rpc('save_bracket', { p_token: token, p_picks: bracketDraft });
+        bracketDirty = false;
+        applyState(st, true);
+        toast('Пикем сохранён', 'ok');
+      } catch (e) {
+        toast(e.message, 'bad');
+        ev.target.disabled = false;
+      }
+    };
+    document.getElementById('undoBracket').onclick = () => { bracketDraft = { ...(S.my_picks || {}) }; bracketDirty = false; viewPickem(); };
+    document.getElementById('clearBracket').onclick = () => {
+      if (!confirm('Очистить всю сетку? Изменения применятся после «Сохранить».')) return;
+      bracketDraft = {}; bracketDirty = true; viewPickem();
     };
   }
 
-  function vsCard(m) {
-    const total = m.votes ? Object.values(m.votes).reduce((a, b) => a + b, 0) : 0;
-    const pick = myPick(m.id);
-    const side = s => {
-      const pid = m[s];
-      if (!pid) return `<div class="side tbd disabled"><small>ожидается</small><b>${srcLabel(m[s + '_src'])}</b></div>`;
-      const picked = pick === pid;
-      const cls = ['side', m.open ? '' : 'disabled', picked ? 'picked' : '', picked ? pickResult(m, pid) : '', m.winner === pid ? 'won' : '', m.loser === pid ? 'lost' : ''].join(' ');
-      const crowd = m.votes && total ? `<span class="crowd">${Math.round(100 * (m.votes[pid] || 0) / total)}% выбрали</span>` : '';
-      return `<div class="${cls}" ${m.open ? `data-pick="${pid}" data-match="${m.id}"` : ''}><small>№${pid}</small><b>${esc(P(pid))}</b>${crowd}</div>`;
+  function pickCard(m, [col, row], pr, editable) {
+    const p = pr[m.id];
+    const decided = !!m.winner;
+    const rowHtml = side => {
+      const pid = p[side];
+      const src = m[side + '_src'];
+      const picked = pid && p.winner === pid;
+      let cls = 'prow';
+      if (m.bracket === 'lower' && src[0] === 'L') cls += ' from-upper';
+      // прогноз «сгорел»: реальные участники матча известны, и выбранного игрока среди них нет
+      const dead = picked && !decided && m.a && m.b && pid !== m.a && pid !== m.b;
+      if (picked) cls += decided ? (pid === m.winner ? ' pk-ok' : ' pk-bad') : dead ? ' pk-bad' : ' picked';
+      else if (p.winner) cls += ' pk-other';
+      const can = editable && pid && p.active && p.a && p.b;
+      return `<div class="${cls}${can ? ' pickable' : ''}" ${can ? `data-pm="${m.id}" data-pp="${pid}"` : ''}>
+        <span class="seed">${pid ? '№' + pid : ''}</span>
+        <span class="pname ${pid ? '' : 'tbd'}">${pid ? esc(P(pid)) : srcLabel(src)}</span>
+        ${picked ? `<span class="pkmark">${decided ? (pid === m.winner ? '✓' : '✗') : dead ? '✗' : '●'}</span>` : ''}
+      </div>`;
     };
-    let tag;
-    if (!m.active) tag = M(GF).winner ? '<span class="tag">не понадобился</span>' : `<span class="tag" title="Играется, только если М${GF} выиграет игрок нижней сетки">если нужно</span>`;
-    else if (m.winner) {
-      tag = !pick ? '<span class="tag">без прогноза</span>'
-        : pick === m.winner ? `<span class="tag ok">+${m.points}</span>` : '<span class="tag bad">0</span>';
-    } else if (m.locked) tag = '<span class="tag">идёт · приём закрыт</span>';
-    else if (m.open) tag = `<span class="tag gold">+${m.points} за угаданного</span>`;
-    else tag = `<span class="tag">ожидание · +${m.points}</span>`;
-    const pa = m.votes && total ? 100 * (m.votes[m.a] || 0) / total : 0;
-    return `<div class="vs ${m.bracket}" data-id="${m.id}">
-      <div class="vs-head"><span><b>${matchTitle(m)}</b> <span class="muted">· ${esc(m.round)}</span></span>${tag}</div>
-      <div class="vs-body">${side('a')}<div class="vs-x">VS</div>${side('b')}</div>
-      ${m.votes && total ? `<div class="crowdbar"><i class="a" style="width:${pa}%"></i><i class="b" style="width:${100 - pa}%"></i></div>` : ''}
-      ${m.score || (m.open && !pick) ? `<div class="vs-foot"><span>${m.open && !pick ? 'Прогноз не сделан' : ''}</span><span>${m.score ? 'Счёт: ' + esc(m.score) : ''}</span></div>` : ''}
-    </div>`;
+    let right = `+${m.points}`;
+    if (m.id === RESET && !p.active) right = 'если нужно';
+    const fact = decided ? `<div class="fact">факт: <b>${esc(P(m.winner))}</b>${m.score ? ' · ' + esc(m.score) : ''}</div>`
+      : (!m.active && M(GF).winner ? '<div class="fact">не понадобился</div>' : '');
+    return `<div class="match pick ${m.bracket} ${p.active ? '' : 'inactive'}" data-match="${m.id}" style="grid-column:${col};grid-row:${row + 1} / span 2">
+      <div class="mh"><span>${matchTitle(m)}</span><span class="to">${right}</span></div>${rowHtml('a')}${rowHtml('b')}${fact}</div>`;
   }
 
   function challengeHtml() {
@@ -483,10 +539,10 @@
     const champSel = d.champion ? [d.champion] : [];
     return `
       <div class="section-head" style="margin-bottom:6px">
-        <h2>Прогноз на турнир</h2>
+        <h2>Бонус-прогноз</h2>
         ${open ? '<span class="tag gold">открыт до начала первого матча</span>' : '<span class="tag">закрыт</span>'}
       </div>
-      <p class="muted" style="margin:0 0 16px;font-size:13.5px">Как Pick'em Challenge на мейджоре: выберите чемпиона, четвёрку призёров и тех, кто вылетит без побед.</p>
+      <p class="muted" style="margin:0 0 16px;font-size:13.5px">Дополнительные очки к сетке: чемпион, четвёрка призёров и те, кто вылетит без побед. Сохраняется отдельно.</p>
       <div class="challenge">
         <div class="ch-row"><h3>🏆 Чемпион <span class="tag gold">5 очков</span></h3><p class="hint">Кто выиграет турнир</p>${chips('champion', champSel, d.zero)}</div>
         <div class="ch-row"><h3>Топ-4 <span class="tag gold">по 1 очку</span> <span class="dim" style="font-size:13px;font-family:Inter">${d.top4.length}/4</span></h3><p class="hint">Кто займёт места с 1-го по 4-е (порядок не важен)</p>${chips('top4', d.top4, d.top4.length >= 4 ? S.players.map(p => p.id) : d.zero)}</div>
@@ -520,7 +576,7 @@
         const st = await rpc('save_predictions', { p_token: token, p_champion: draft.champion, p_top4: draft.top4, p_zero: draft.zero });
         draftDirty = false;
         applyState(st, true);
-        toast('Прогноз на турнир сохранён', 'ok');
+        toast('Бонус-прогноз сохранён', 'ok');
       } catch (e) {
         toast(e.message, 'bad');
         save.disabled = false;
@@ -549,25 +605,32 @@
     }).join('');
     const maxPts = S.matches.filter(m => m.active || !M(GF).winner).reduce((a, m) => a + m.points, 0) + 11;
     app.innerHTML = `
-      <div class="hero"><div><h1>Таблица пикема</h1><p>Обновляется автоматически после каждого результата. Нажмите на участника, чтобы увидеть его прогнозы.</p></div></div>
+      <div class="hero"><div><h1>Таблица пикема</h1><p>Обновляется автоматически после каждого результата. После начала турнира нажмите на участника, чтобы увидеть его сетку.</p></div></div>
       <div class="panel section" style="padding:6px 8px">
         <table class="tbl">
-          <thead><tr><th>#</th><th>Участник</th><th class="num">Очки</th><th class="num hide-sm">Матчи</th><th class="num hide-sm">Турнир</th><th class="num">Угадано</th><th class="num hide-sm">Прогнозов</th></tr></thead>
+          <thead><tr><th>#</th><th>Участник</th><th class="num">Очки</th><th class="num hide-sm">Сетка</th><th class="num hide-sm">Бонус</th><th class="num">Угадано</th><th class="num hide-sm">Прогнозов</th></tr></thead>
           <tbody>${rows || '<tr><td colspan="7" class="muted">Пока пусто</td></tr>'}</tbody>
         </table>
       </div>
-      <p class="dim" style="font-size:13px">Максимум возможных очков: ${maxPts}. При равенстве очков выше тот, у кого больше угаданных прогнозов. Чужие прогнозы видны после того, как матч начался.</p>
+      <p class="dim" style="font-size:13px">Максимум возможных очков: ${maxPts}. При равенстве очков выше тот, у кого больше угаданных прогнозов. Сетки участников видны после начала турнира.</p>
       <div class="section">
-        <div class="section-head"><h2>Кто что угадал</h2><span class="muted">Прогнозы по матчам — открываются, когда матч начался</span></div>
+        <div class="section-head"><h2>Кто что угадал</h2><span class="muted">Сетки участников по матчам — открываются, когда начался турнир</span></div>
         <div class="panel" style="padding:10px">${picksGridHtml()}</div>
         <div class="legend"><span><i style="background:var(--ok)"></i>угадал</span><span><i style="background:var(--bad)"></i>мимо</span><span><i style="background:var(--line2)"></i>матч идёт</span><span>— нет прогноза</span></div>
       </div>`;
-    app.querySelectorAll('tr[data-name]').forEach(tr => { tr.onclick = () => openUser(tr.dataset.name); });
+    app.querySelectorAll('tr[data-name]').forEach(tr => {
+      tr.onclick = () => {
+        const n = tr.dataset.name;
+        if (me() && me().name === n) location.hash = '#/pickem';
+        else if (S.predictions_open) toast('Сетки участников откроются, когда начнётся турнир');
+        else location.hash = '#/pickem?u=' + encodeURIComponent(n);
+      };
+    });
   }
 
   function picksGridHtml() {
-    const ms = S.matches.filter(m => m.revealed && m.active).sort((a, b) => a.play_order - b.play_order || a.id - b.id);
-    if (!ms.length) return '<div class="dim" style="padding:14px;text-align:center">Сводка появится, когда начнётся первый матч — до этого прогнозы скрыты.</div>';
+    if (S.predictions_open) return '<div class="dim" style="padding:14px;text-align:center">Сводка появится, когда начнётся турнир — до этого сетки участников скрыты.</div>';
+    const ms = visibleMatches().sort((a, b) => a.play_order - b.play_order || a.id - b.id);
     const pickOf = {};
     (S.revealed_picks || []).forEach(p => { pickOf[`${p.account}|${p.match_id}`] = p.player_id; });
     const decided = ms.filter(m => m.winner).length;
@@ -642,9 +705,11 @@
           <h2>Пикем</h2>
           <ol>
             <li>Войдите под своим именем и паролем от организатора. Пароль можно сменить в профиле.</li>
-            <li><b>Прогноз на матч</b> можно сделать, когда оба соперника известны. Его можно менять, пока организатор не начал матч.</li>
-            <li>Чужие прогнозы и проценты «кто за кого» открываются, когда матч начался.</li>
-            <li><b>Прогноз на турнир</b> (чемпион, топ-4, вылет с 0–2) закрывается перед первым матчем.</li>
+            <li>Как на мейджоре: <b>до начала турнира заполните всю сетку</b> — в каждом матче выберите победителя. Он проходит дальше, проигравший уходит в нижнюю сетку.</li>
+            <li>Сетку можно менять сколько угодно, пока не начат первый матч. Потом она закрывается для всех.</li>
+            <li>Очки дают за каждый матч, где угадан победитель — даже если по вашей сетке в этом матче играл кто-то другой, важно, кого вы поставили победителем.</li>
+            <li>Чужие сетки и проценты «кто за кого» открываются, когда начинается турнир.</li>
+            <li>Бонус-прогноз (чемпион, топ-4, вылет с 0–2) — дополнительные очки, закрывается тогда же.</li>
             <li>Можно ставить и на себя, и против себя.</li>
           </ol>
         </div>
@@ -655,7 +720,7 @@
           </tbody></table>
         </div>
         <div class="panel">
-          <h2>Очки за прогноз на турнир</h2>
+          <h2>Бонус-прогноз</h2>
           <table class="tbl"><tbody>
             <tr><td><b>+5 очков</b></td><td class="muted">угаданный чемпион</td></tr>
             <tr><td><b>+1 очко</b></td><td class="muted">за каждого угаданного игрока в топ-4 (до 4 очков)</td></tr>
@@ -681,17 +746,14 @@
       <div class="hero"><div><h1>Панель организатора</h1><p>Вносите результаты — сетка и таблица пикема пересчитаются сами.</p></div></div>
 
       <div class="panel section">
-        <div class="section-head"><h2>Матчи</h2><span class="muted">«Начать матч» закрывает приём прогнозов. Результат тоже закрывает приём.</span></div>
-        <div class="savebar" style="margin-bottom:6px">
-          <button class="btn small" id="lockAll" ${S.matches.some(m => m.open) ? '' : 'disabled'}>Закрыть приём на все открытые матчи (${S.matches.filter(m => m.open).length})</button>
-        </div>
+        <div class="section-head"><h2>Матчи</h2><span class="muted">Первое «Начать матч» или первый результат закрывает пикем для всех.</span></div>
         ${ms.map(m => {
           const ready = m.active && m.a && m.b;
           const sc = scoreDraft[m.id] ?? m.score ?? '';
           return `<div class="adm-match">
             <div><b>М${m.id}</b><div class="dim" style="font-size:12px">${STAGES[m.play_order].replace('Верхняя сетка · ', 'Верх · ').replace('Нижняя сетка · ', 'Низ · ')}</div></div>
             <div>${m.a ? esc(P(m.a)) : `<span class="dim">${srcLabel(m.a_src)}</span>`} <span class="dim">vs</span> ${m.b ? esc(P(m.b)) : `<span class="dim">${srcLabel(m.b_src)}</span>`}
-              <div style="margin-top:3px">${!m.active ? '<span class="tag">не нужен</span>' : m.winner ? `<span class="tag ok">победил ${esc(P(m.winner))}</span>` : m.locked ? '<span class="tag live">идёт, приём закрыт</span>' : ready ? '<span class="tag gold">приём прогнозов открыт</span>' : '<span class="tag">ожидание</span>'}</div>
+              <div style="margin-top:3px">${!m.active ? '<span class="tag">не нужен</span>' : m.winner ? `<span class="tag ok">победил ${esc(P(m.winner))}</span>` : m.locked ? '<span class="tag live">идёт</span>' : ready ? '<span class="tag">не начат</span>' : '<span class="tag">ожидание</span>'}</div>
             </div>
             <div class="adm-btns">
               ${ready ? `
@@ -699,7 +761,7 @@
                 <button class="btn small ${m.winner === m.b ? 'sel' : ''}" data-win="${m.id}" data-pid="${m.b}">✓ ${esc(P(m.b))}</button>
                 <input class="input" placeholder="счёт" data-score="${m.id}" value="${esc(sc)}" maxlength="20">
                 ${m.winner ? `<button class="btn small danger" data-clear="${m.id}">Сбросить</button>`
-                  : `<button class="btn small" data-lock="${m.id}" data-val="${m.locked ? 0 : 1}">${m.locked ? 'Открыть приём' : 'Начать матч'}</button>`}` : ''}
+                  : `<button class="btn small" data-lock="${m.id}" data-val="${m.locked ? 0 : 1}">${m.locked ? 'Отменить начало' : 'Начать матч'}</button>`}` : ''}
             </div>
           </div>`;
         }).join('')}
@@ -716,7 +778,7 @@
           <div class="savebar"><button class="btn primary" id="sSave">Сохранить</button></div>
           <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
           <div class="savebar">
-            <span>Прогноз на турнир: ${S.predictions_open ? '<span class="tag gold">открыт</span>' : '<span class="tag">закрыт</span>'}</span>
+            <span>Пикем: ${S.predictions_open ? '<span class="tag gold">открыт</span>' : '<span class="tag">закрыт</span>'}</span>
             <button class="btn small" id="sPred">${st.predictions_locked === 'true' ? 'Снять ручную блокировку' : 'Закрыть вручную'}</button>
           </div>
           <p class="dim" style="font-size:12.5px;margin-bottom:0">Он закрывается автоматически, как только начат или сыгран любой матч.</p>
@@ -730,16 +792,6 @@
       </div>`;
 
     app.querySelectorAll('[data-score]').forEach(el => { el.oninput = () => { scoreDraft[el.dataset.score] = el.value; }; });
-    document.getElementById('lockAll').onclick = async () => {
-      const ids = S.matches.filter(m => m.open).map(m => m.id);
-      if (!ids.length || !confirm(`Закрыть приём прогнозов на ${ids.map(id => 'М' + id).join(', ')}?`)) return;
-      try {
-        let st = null;
-        for (const id of ids) st = await rpc('admin_set_lock', { p_token: token, p_match: id, p_locked: true });
-        applyState(st, true);
-        toast(`Приём закрыт: ${ids.map(id => 'М' + id).join(', ')}`, 'ok');
-      } catch (e) { toast(e.message, 'bad'); refresh(true); }
-    };
     app.querySelectorAll('[data-win]').forEach(el => {
       el.onclick = async () => {
         const id = +el.dataset.win, pid = +el.dataset.pid, m = M(id);
@@ -758,7 +810,7 @@
     });
     app.querySelectorAll('[data-lock]').forEach(el => {
       el.onclick = () => adminCall('admin_set_lock', { p_match: +el.dataset.lock, p_locked: el.dataset.val === '1' },
-        el.dataset.val === '1' ? `М${el.dataset.lock}: приём прогнозов закрыт` : `М${el.dataset.lock}: приём открыт`);
+        el.dataset.val === '1' ? `М${el.dataset.lock}: матч начат` : `М${el.dataset.lock}: начало отменено`);
     });
     document.getElementById('sSave').onclick = async () => {
       const vals = { title: document.getElementById('sTitle').value.trim(), date: document.getElementById('sDate').value.trim(), place: document.getElementById('sPlace').value.trim() };
@@ -815,7 +867,7 @@
         const r = await rpc('login', { p_name: document.getElementById('lName').value, p_password: document.getElementById('lPass').value });
         if (r.error) throw new Error(r.error);
         setToken(r.token);
-        draftDirty = false;
+        draftDirty = false; bracketDirty = false;
         hideModal();
         await refresh();
         toast(`Привет, ${r.name}!`, 'ok');
@@ -855,7 +907,7 @@
     document.getElementById('logoutBtn').onclick = async () => {
       try { await rpc('logout', { p_token: token }); } catch { /* всё равно выходим */ }
       setToken(null);
-      draftDirty = false;
+      draftDirty = false; bracketDirty = false;
       hideModal();
       await refresh();
       toast('Вы вышли');
@@ -881,6 +933,7 @@
   // ───────────── Старт ─────────────
 
   window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
+  window.addEventListener('beforeunload', e => { if (bracketDirty) { e.preventDefault(); e.returnValue = ''; } });
   let rt;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (route() === 'bracket') drawAllLines(); }, 120); });
   setInterval(() => {
